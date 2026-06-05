@@ -1,0 +1,26 @@
+INSTALACIÓN RÁPIDA
+
+1. Clona o descarga este repositorio.
+2. Abre Chrome y entra a: chrome://extensions/
+3. Activa Developer mode.
+4. Pulsa Load unpacked.
+5. Selecciona la carpeta descargada.
+
+USO
+
+1. Entra a una página de tu sitio con videos Vimeo embebidos.
+2. Haz clic en la extensión.
+3. Escribe tu dominio y pulsa Guardar.
+4. Pulsa Reescanear si es necesario.
+5. En cada video puedes:
+   - cambiar el nombre del archivo,
+   - elegir la calidad,
+   - descargar,
+   - ejecutar diagnóstico.
+
+NOTAS
+
+- Esta versión funciona sin token ni API.
+- Aprovecha solo lo que Vimeo exponga desde el embed/player.
+- Si Vimeo entrega solo HLS o DASH, la extensión lo avisará.
+- Úsala únicamente con videos propios o autorizados.
