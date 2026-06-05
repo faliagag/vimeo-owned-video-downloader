@@ -69,53 +69,56 @@
     attributeFilter: ['src', 'href', 'data-src', 'data-vimeo-id', 'data-video-id', 'data-vimeo-url']
   });
 
-  /* ---- FIX 403: fetch desde contexto de página con Referer correcto ---- */
-  // El background.js (service worker) NO puede enviar el Referer del sitio.
-  // Por eso inyectamos la lógica de fetch aquí, en el contexto de la página,
-  // donde el navegador adjunta automáticamente el Referer correcto.
-  window.__vimeoFetchConfig = async function(videoId) {
-    async function tryFetch(url, opts) {
-      const r = await fetch(url, opts);
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r;
-    }
-    // 1. Intentar data-config-url desde el HTML del player
-    try {
-      const html = await (await tryFetch(`https://player.vimeo.com/video/${videoId}`, { credentials: 'include' })).text();
-      const dcUrl = (html.match(/data-config-url="([^"]+)"/i) || [])[1];
-      if (dcUrl) {
-        const cfg = await (await tryFetch(dcUrl.replace(/&amp;/g, '&'), { credentials: 'include' })).json();
-        return { ok: true, config: cfg };
+  /* ---- CONFIG STORE: guarda configs recibidas del iframe ---- */
+  // vimeo_frame.js corre dentro del iframe de Vimeo y nos manda playerConfig via postMessage
+  // SIN ningún fetch externo → no hay CORS ni 403
+  window.__vimeoConfigs = window.__vimeoConfigs || {};
+
+  window.addEventListener('message', function (evt) {
+    if (!evt.data) return;
+
+    // Recibir config desde vimeo_frame.js
+    if (evt.data.__vimeoExtFrameConfig) {
+      const { videoId, config, error } = evt.data;
+      if (videoId) {
+        window.__vimeoConfigs[videoId] = { config, error, ts: Date.now() };
       }
-      // 2. config inline
-      const inlineMatch = html.match(/(?:window\.playerConfig\s*=\s*|var\s+config\s*=\s*)(\{[\s\S]{10,5000}?\});/);
-      if (inlineMatch) {
-        try { return { ok: true, config: JSON.parse(inlineMatch[1]) }; } catch(_) {}
-      }
-      // 3. progressive inline
-      const progMatch = html.match(/"progressive"\s*:\s*(\[[\s\S]{2,4000}?\])/);
-      if (progMatch) {
-        try {
-          return { ok: true, config: { request: { files: { progressive: JSON.parse(progMatch[1]) } }, video: { title: 'video-' + videoId } } };
-        } catch(_) {}
-      }
-    } catch(e) {
-      // si falla el HTML, intentar el endpoint /config directo
+      return;
     }
-    // 4. Endpoint /config directo
-    try {
-      const cfg = await (await tryFetch(`https://player.vimeo.com/video/${videoId}/config`, { credentials: 'include' })).json();
-      return { ok: true, config: cfg };
-    } catch(e) {
-      return { ok: false, error: e.message };
-    }
+  });
+
+  // Pedir config activamente a todos los iframes de Vimeo en la página
+  function requestConfigsFromIframes() {
+    document.querySelectorAll('iframe[src*="vimeo.com"]').forEach(f => {
+      try { f.contentWindow.postMessage({ __vimeoExtCmd: 'REQUEST_CONFIG' }, '*'); } catch (_) {}
+    });
+  }
+  window.__requestVimeoConfigs = requestConfigsFromIframes;
+
+  // Obtener config con espera (hasta 4 segundos)
+  window.__getVimeoConfig = function (videoId) {
+    return new Promise((resolve) => {
+      if (window.__vimeoConfigs[videoId]) {
+        return resolve(window.__vimeoConfigs[videoId]);
+      }
+      requestConfigsFromIframes();
+      const start = Date.now();
+      const poll = setInterval(() => {
+        if (window.__vimeoConfigs[videoId]) {
+          clearInterval(poll);
+          resolve(window.__vimeoConfigs[videoId]);
+        } else if (Date.now() - start > 4000) {
+          clearInterval(poll);
+          resolve({ config: null, error: 'Tiempo de espera agotado. El iframe de Vimeo no respondió.' });
+        }
+      }, 150);
+    });
   };
 
-  // Escucha mensajes desde el background para ejecutar el fetch en contexto de página
-  window.addEventListener('message', async function(evt) {
-    if (!evt.data || evt.data.__vimeoExtCmd !== 'FETCH_CONFIG') return;
-    const { videoId, reqId } = evt.data;
-    const result = await window.__vimeoFetchConfig(videoId);
-    window.postMessage({ __vimeoExtResp: 'FETCH_CONFIG_RESULT', reqId, ...result }, '*');
-  });
+  // Solicitar configs al cargar
+  if (document.readyState === 'complete') {
+    requestConfigsFromIframes();
+  } else {
+    window.addEventListener('load', requestConfigsFromIframes);
+  }
 })();
