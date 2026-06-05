@@ -1,4 +1,5 @@
 (function () {
+  /* ---- utilidades ---- */
   function normalizeUrl(url) {
     try { return new URL(url, location.href).href; } catch { return url || ''; }
   }
@@ -21,6 +22,8 @@
     if (h?.textContent) options.push(h.textContent.trim());
     return options.find(Boolean) || '';
   }
+
+  /* ---- detectores ---- */
   function fromIframes() {
     return [...document.querySelectorAll('iframe')].map(f => {
       const src = normalizeUrl(f.getAttribute('src') || f.getAttribute('data-src') || '');
@@ -40,7 +43,9 @@
     const out = [];
     document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
       const txt = s.textContent || '';
-      [...txt.matchAll(/vimeo\.com\/(?:video\/)?(\d+)/g)].forEach(m => out.push({ kind: 'jsonld', detectedBy: 'json-ld', src: `https://player.vimeo.com/video/${m[1]}`, vimeoId: m[1], titleHint: '' }));
+      [...txt.matchAll(/vimeo\.com\/(?:video\/)?(\d+)/g)].forEach(m =>
+        out.push({ kind: 'jsonld', detectedBy: 'json-ld', src: `https://player.vimeo.com/video/${m[1]}`, vimeoId: m[1], titleHint: '' })
+      );
     });
     return out;
   }
@@ -59,5 +64,58 @@
   }
   window.__scanVimeoEmbedsNow = scanVimeoEmbedsNow;
   scanVimeoEmbedsNow();
-  new MutationObserver(() => scanVimeoEmbedsNow()).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'href', 'data-src', 'data-vimeo-id', 'data-video-id', 'data-vimeo-url'] });
+  new MutationObserver(() => scanVimeoEmbedsNow()).observe(document.documentElement, {
+    childList: true, subtree: true, attributes: true,
+    attributeFilter: ['src', 'href', 'data-src', 'data-vimeo-id', 'data-video-id', 'data-vimeo-url']
+  });
+
+  /* ---- FIX 403: fetch desde contexto de página con Referer correcto ---- */
+  // El background.js (service worker) NO puede enviar el Referer del sitio.
+  // Por eso inyectamos la lógica de fetch aquí, en el contexto de la página,
+  // donde el navegador adjunta automáticamente el Referer correcto.
+  window.__vimeoFetchConfig = async function(videoId) {
+    async function tryFetch(url, opts) {
+      const r = await fetch(url, opts);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r;
+    }
+    // 1. Intentar data-config-url desde el HTML del player
+    try {
+      const html = await (await tryFetch(`https://player.vimeo.com/video/${videoId}`, { credentials: 'include' })).text();
+      const dcUrl = (html.match(/data-config-url="([^"]+)"/i) || [])[1];
+      if (dcUrl) {
+        const cfg = await (await tryFetch(dcUrl.replace(/&amp;/g, '&'), { credentials: 'include' })).json();
+        return { ok: true, config: cfg };
+      }
+      // 2. config inline
+      const inlineMatch = html.match(/(?:window\.playerConfig\s*=\s*|var\s+config\s*=\s*)(\{[\s\S]{10,5000}?\});/);
+      if (inlineMatch) {
+        try { return { ok: true, config: JSON.parse(inlineMatch[1]) }; } catch(_) {}
+      }
+      // 3. progressive inline
+      const progMatch = html.match(/"progressive"\s*:\s*(\[[\s\S]{2,4000}?\])/);
+      if (progMatch) {
+        try {
+          return { ok: true, config: { request: { files: { progressive: JSON.parse(progMatch[1]) } }, video: { title: 'video-' + videoId } } };
+        } catch(_) {}
+      }
+    } catch(e) {
+      // si falla el HTML, intentar el endpoint /config directo
+    }
+    // 4. Endpoint /config directo
+    try {
+      const cfg = await (await tryFetch(`https://player.vimeo.com/video/${videoId}/config`, { credentials: 'include' })).json();
+      return { ok: true, config: cfg };
+    } catch(e) {
+      return { ok: false, error: e.message };
+    }
+  };
+
+  // Escucha mensajes desde el background para ejecutar el fetch en contexto de página
+  window.addEventListener('message', async function(evt) {
+    if (!evt.data || evt.data.__vimeoExtCmd !== 'FETCH_CONFIG') return;
+    const { videoId, reqId } = evt.data;
+    const result = await window.__vimeoFetchConfig(videoId);
+    window.postMessage({ __vimeoExtResp: 'FETCH_CONFIG_RESULT', reqId, ...result }, '*');
+  });
 })();
