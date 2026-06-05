@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Vimeo Owned Video Downloader Definitiva",
+  "version": "4.0.0",
+  "description": "Extensión local definitiva para descargar videos propios o autorizados embebidos desde Vimeo, con selector de calidad, renombrado, diagnóstico y registro local.",
+  "permissions": ["activeTab", "scripting", "downloads", "storage", "tabs"],
+  "host_permissions": [
+    "https://player.vimeo.com/*",
+    "https://*.vimeo.com/*",
+    "https://*/*",
+    "http://*/*"
+  ],
+  "action": {
+    "default_title": "Vimeo Downloader Definitiva",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*/*", "http://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
