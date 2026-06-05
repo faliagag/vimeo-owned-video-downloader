@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Vimeo Owned Video Downloader",
-  "version": "7.0.0",
-  "description": "Descarga videos propios desde Vimeo. HLS sin límite de tamaño via Blob URL. Sin dependencias externas.",
+  "version": "8.0.0",
+  "description": "Descarga videos propios desde Vimeo con barra flotante persistente. La descarga no se interrumpe al cerrar el popup.",
   "permissions": ["activeTab", "scripting", "downloads", "storage", "tabs"],
   "host_permissions": ["<all_urls>"],
   "content_security_policy": {
-    "extension_pages": "default-src 'self'; connect-src https://* http://*; script-src 'self'; worker-src 'self'"
+    "extension_pages": "default-src 'self'; connect-src https://* http://*; script-src 'self';"
   },
   "action": {
     "default_title": "Vimeo Downloader",
@@ -16,7 +16,7 @@
     "service_worker": "background.js"
   },
   "web_accessible_resources": [{
-    "resources": ["downloader.html", "downloader.js"],
+    "resources": ["downloader.html", "downloader.js", "floater.js", "floater.css"],
     "matches": ["<all_urls>"]
   }],
   "content_scripts": [

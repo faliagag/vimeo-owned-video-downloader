@@ -1,4 +1,4 @@
-/* popup.js v7.0 */
+/* popup.js v8.0 */
 'use strict';
 const statusEl    = document.getElementById('status');
 const videosEl    = document.getElementById('videos');
@@ -8,83 +8,63 @@ const saveHostBtn = document.getElementById('saveHost');
 const refreshBtn  = document.getElementById('refresh');
 const clearLogBtn = document.getElementById('clearLog');
 const logEl       = document.getElementById('log');
-const progressEl  = document.getElementById('progressSection');
-const progressBar = document.getElementById('progressBar');
-const progressMsg = document.getElementById('progressMsg');
-const tsNoteEl    = document.getElementById('tsNote');
 
-let _tabId = null, _pageUrl = null, _converting = false;
+let _tabId = null, _pageUrl = null;
 
-function normalizeHost(v) {
-  return (v || '').trim().replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
-}
+function normalizeHost(v) { return (v || '').trim().replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase(); }
 async function appendLog(line) {
   const { activityLog } = await chrome.storage.local.get(['activityLog']);
   const next = [`[${new Date().toLocaleTimeString()}] ${line}`, ...(activityLog || [])].slice(0, 200);
   await chrome.storage.local.set({ activityLog: next });
   renderLog(next);
 }
-function renderLog(list) {
-  logEl.textContent = (list?.length) ? list.join('\n') : 'Sin actividad.';
-}
-async function loadLog() {
-  const { activityLog } = await chrome.storage.local.get(['activityLog']);
-  renderLog(activityLog || []);
-}
-
-chrome.runtime.onMessage.addListener(msg => {
-  if (msg?.type === 'CONVERT_PROGRESS') setProgress(msg.message, msg.pct);
-});
-
-function setProgress(text, pct) {
-  if (!text) { progressEl.style.display = 'none'; return; }
-  progressEl.style.display = 'block';
-  progressMsg.textContent = text;
-  const p = pct >= 0 ? pct : (text.match(/(\d+)%/)?.[1] ? parseInt(text.match(/(\d+)%/)[1]) : -1);
-  if (p >= 0) progressBar.style.width = Math.min(p, 100) + '%';
-  if (/completad|iniciada/i.test(text)) setTimeout(() => { progressEl.style.display = 'none'; }, 4000);
-}
+function renderLog(list) { logEl.textContent = list?.length ? list.join('\n') : 'Sin actividad.'; }
+async function loadLog() { const { activityLog } = await chrome.storage.local.get(['activityLog']); renderLog(activityLog || []); }
 
 function buildCard(video, idx) {
   const card = document.createElement('div'); card.className = 'card';
-  const title = document.createElement('div'); title.className = 'title';
-  title.textContent = `${idx + 1}. ${video.titleHint || 'Embed Vimeo'} · ID ${video.vimeoId || '?'}`;
-  const meta = document.createElement('div'); meta.className = 'meta';
-  meta.textContent = (video.src || '').slice(0, 90);
-  const tags = document.createElement('div'); tags.className = 'tags';
-  if (video.detectedBy) { const s = document.createElement('span'); s.className = 'tag'; s.textContent = video.detectedBy; tags.appendChild(s); }
-  if (video.vimeoId) { const s = document.createElement('span'); s.className = 'tag blue'; s.textContent = 'ID: ' + video.vimeoId; tags.appendChild(s); }
-  const nameField = document.createElement('div'); nameField.className = 'field';
-  nameField.innerHTML = `<label>Nombre del archivo</label><input type="text" value="${(video.titleHint || 'video-' + video.vimeoId).replace(/"/g, '&quot;')}">` ;
-  const filenameInput = nameField.querySelector('input');
-  const actions = document.createElement('div'); actions.className = 'actions';
+  card.innerHTML = `
+    <div class="title">${idx + 1}. ${escHtml(video.titleHint || 'Embed Vimeo')} &middot; ID ${video.vimeoId || '?'}</div>
+    <div class="meta">${escHtml((video.src || '').slice(0, 90))}</div>
+    <div class="tags">
+      <span class="tag">${escHtml(video.detectedBy || '')}</span>
+      <span class="tag blue">ID: ${video.vimeoId || '?'}</span>
+    </div>
+    <div class="field"><label>Nombre del archivo</label><input type="text" value="${escAttr(video.titleHint || 'video-' + video.vimeoId)}"></div>
+    <div class="actions"></div>
+  `;
+  const filenameInput = card.querySelector('input');
+  const actions = card.querySelector('.actions');
 
+  // Botón descargar
   const btnDl = document.createElement('button');
   btnDl.textContent = '⬇ Descargar';
   btnDl.onclick = async () => {
-    if (_converting) { statusEl.textContent = '⏳ Descarga en curso…'; return; }
-    statusEl.textContent = 'Preparando…';
-    tsNoteEl.style.display = 'none';
-    setProgress('Iniciando…', 1);
+    statusEl.textContent = 'Iniciando…';
+    // Inyectar floater antes de iniciar
+    await chrome.runtime.sendMessage({ type: 'INJECT_FLOATER' });
+    // Notificar al floater que va a empezar
+    if (_tabId) chrome.tabs.sendMessage(_tabId, { type: 'FLOATER_START', videoId: video.vimeoId, title: filenameInput.value }).catch(() => {});
     const payload = { ...video, tabId: _tabId, pageUrl: _pageUrl, preferredName: filenameInput.value };
     const r = await chrome.runtime.sendMessage({ type: 'TRY_DOWNLOAD', payload });
+    statusEl.textContent = r.message || '…';
+    appendLog((r.ok ? 'OK' : 'ERR') + ' · ' + filenameInput.value + ' · ' + r.message);
     if (r.converting && r.hlsUrl) {
-      _converting = true;
-      statusEl.textContent = r.message;
-      appendLog('HLS START · ' + filenameInput.value);
-      const cr = await chrome.runtime.sendMessage({
+      // La descarga HLS corre en background; popup puede cerrarse
+      chrome.runtime.sendMessage({
         type: 'CONVERT_HLS',
-        payload: { hlsUrl: r.hlsUrl, title: r.title || filenameInput.value, referer: _pageUrl }
+        payload: { hlsUrl: r.hlsUrl, title: r.title || filenameInput.value, referer: _pageUrl, tabId: _tabId, videoId: video.vimeoId }
+      }).then(cr => {
+        if (_tabId) {
+          chrome.tabs.sendMessage(_tabId, { type: cr?.ok ? 'FLOATER_DONE' : 'FLOATER_ERROR', videoId: video.vimeoId, title: filenameInput.value, message: cr?.message }).catch(() => {});
+        }
+        appendLog((cr?.ok ? 'HLS OK' : 'HLS ERR') + ' · ' + filenameInput.value + ' · ' + cr?.message);
       });
-      _converting = false;
-      setProgress(cr.ok ? '✅ Completado' : null);
-      statusEl.textContent = cr.message || '…';
-      if (cr.ok) tsNoteEl.style.display = 'block';
-      appendLog((cr.ok ? 'HLS OK' : 'HLS ERR') + ' · ' + filenameInput.value + ' · ' + cr.message);
+      statusEl.textContent = '⏳ Descargando en segundo plano. Puedes cerrar este popup.';
+    } else if (r.ok) {
+      if (_tabId) chrome.tabs.sendMessage(_tabId, { type: 'FLOATER_DONE', videoId: video.vimeoId, title: filenameInput.value, message: r.message }).catch(() => {});
     } else {
-      setProgress(null);
-      statusEl.textContent = r.message || '…';
-      appendLog((r.ok ? 'OK' : 'ERR') + ' · ' + filenameInput.value + ' · ' + r.message);
+      if (_tabId) chrome.tabs.sendMessage(_tabId, { type: 'FLOATER_ERROR', videoId: video.vimeoId, title: filenameInput.value, message: r.message }).catch(() => {});
     }
   };
 
@@ -102,15 +82,17 @@ function buildCard(video, idx) {
   btnRaw.onclick = async () => {
     const r = await chrome.runtime.sendMessage({ type: 'GET_RAW_CONFIG', payload: { ...video, tabId: _tabId, pageUrl: _pageUrl } });
     if (!r.ok) { statusEl.textContent = r.message; return; }
-    const info = 'FILES: [' + r.filesKeys.join(',') + '] | ' + r.candidates.map(c => c.source + ':' + c.quality).join(' | ');
+    const info = '[' + r.filesKeys.join(',') + '] ' + r.candidates.map(c => c.source + ':' + c.quality).join(' | ');
     statusEl.textContent = info;
     appendLog('RAW · ' + (r.videoTitle || video.vimeoId) + ' · ' + info);
   };
 
   actions.append(btnDl, btnDiag, btnRaw);
-  card.append(title, meta, tags, nameField, actions);
   return card;
 }
+
+function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escAttr(s) { return (s||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
 function render(embeds) {
   videosEl.innerHTML = '';
@@ -132,14 +114,10 @@ saveHostBtn.addEventListener('click', async () => {
   appendLog('CONFIG · dominio = ' + h);
 });
 refreshBtn.addEventListener('click', init);
-clearLogBtn.addEventListener('click', async () => {
-  await chrome.storage.local.set({ activityLog: [] });
-  renderLog([]);
-});
+clearLogBtn.addEventListener('click', async () => { await chrome.storage.local.set({ activityLog: [] }); renderLog([]); });
 
 async function init() {
-  await loadHost();
-  await loadLog();
+  await loadHost(); await loadLog();
   statusEl.textContent = 'Escaneando…';
   const r = await chrome.runtime.sendMessage({ type: 'GET_EMBEDS' });
   if (!r?.ok) { statusEl.textContent = '❌ ' + (r?.message || 'Error.'); return; }
