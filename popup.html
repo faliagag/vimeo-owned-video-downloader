@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Vimeo Downloader Definitiva</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: Arial, sans-serif; margin: 0; width: 440px; background:#f8fafc; color:#0f172a; }
+    .wrap { padding: 14px; }
+    h1 { font-size: 17px; margin: 0 0 8px; }
+    p { font-size: 12px; line-height: 1.45; margin: 0 0 10px; color:#334155; }
+    .banner { font-size:11px; border-radius:10px; padding:9px 10px; margin-bottom:10px; }
+    .warn { color:#92400e; background:#fffbeb; border:1px solid #fde68a; }
+    .ok { color:#065f46; background:#ecfdf5; border:1px solid #a7f3d0; }
+    .row { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
+    input[type=text], select { flex:1; padding:9px 10px; border:1px solid #cbd5e1; border-radius:8px; }
+    button { border:0; background:#0f766e; color:#fff; padding:9px 12px; border-radius:8px; cursor:pointer; }
+    button.secondary { background:#334155; }
+    button.light { background:#2563eb; }
+    .list { display:grid; gap:8px; max-height:430px; overflow:auto; }
+    .card { background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:10px; }
+    .title { font-size: 12px; font-weight:700; margin-bottom:4px; }
+    .meta { font-size: 11px; color:#64748b; word-break:break-all; }
+    .tag { display:inline-block; font-size:10px; padding:3px 6px; border-radius:999px; background:#e2e8f0; color:#0f172a; margin:4px 4px 0 0; }
+    .actions { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
+    .field { margin-top:8px; }
+    .field label { display:block; font-size:11px; margin-bottom:4px; color:#475569; }
+    .log { background:#0f172a; color:#e2e8f0; border-radius:10px; padding:10px; font-size:11px; max-height:170px; overflow:auto; white-space:pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Vimeo Downloader Definitiva</h1>
+    <div class="banner warn">Úsala solo con videos propios o autorizados. Esta edición final es local, sin token ni API, y aprovecha al máximo lo que el embed de Vimeo exponga.</div>
+    <div class="row">
+      <input id="allowedHost" type="text" placeholder="tu-dominio.cl">
+      <button id="saveHost" class="secondary">Guardar</button>
+    </div>
+    <div class="banner ok" id="hostInfo">Dominio permitido: sin configurar</div>
+    <div class="row">
+      <button id="refresh" class="light">Reescanear</button>
+      <button id="clearLog" class="secondary">Limpiar registro</button>
+    </div>
+    <p id="status">Analizando la pestaña actual...</p>
+    <div id="videos" class="list"></div>
+    <div class="field">
+      <label>Registro local</label>
+      <div id="log" class="log">Sin actividad todavía.</div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
