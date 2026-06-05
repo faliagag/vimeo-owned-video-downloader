@@ -4,73 +4,78 @@
   <meta charset="UTF-8">
   <title>Vimeo Downloader</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; font-size: 13px; width: 420px; background: #0f172a; color: #e2e8f0; }
-    header { background: #1e293b; padding: 10px 14px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #334155; }
-    header h1 { font-size: 14px; font-weight: 700; color: #f1f5f9; }
-    header span { font-size: 11px; color: #64748b; margin-left: auto; }
-    .section { padding: 10px 14px; border-bottom: 1px solid #1e293b; }
-    .section label { display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
-    .row { display: flex; gap: 6px; align-items: center; }
-    .row input { flex: 1; background: #1e293b; border: 1px solid #334155; border-radius: 6px; padding: 6px 8px; color: #e2e8f0; font-size: 12px; }
-    .info { font-size: 11px; color: #64748b; margin-top: 3px; }
-    #status { background: #1e293b; margin: 8px 14px; border-radius: 8px; padding: 8px 10px; font-size: 11px; color: #94a3b8; line-height: 1.5; word-break: break-all; min-height: 32px; }
-    #progressSection { display: none; margin: 0 14px 8px; background: #1e293b; border-radius: 8px; padding: 8px 10px; }
-    #progressMsg { font-size: 11px; color: #7dd3fc; margin-bottom: 6px; }
-    #progressTrack { background: #0f172a; border-radius: 99px; height: 6px; overflow: hidden; }
-    #progressBar { height: 6px; background: linear-gradient(90deg, #2563eb, #06b6d4); border-radius: 99px; width: 0%; transition: width .3s ease; }
-    .note { margin: 0 14px 8px; background: #1c2a1a; border: 1px solid #166534; border-radius: 8px; padding: 8px 10px; font-size: 10px; color: #86efac; line-height: 1.6; }
-    .note strong { color: #4ade80; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; margin: 0 14px 10px; padding: 10px 12px; }
-    .card .title { font-weight: 600; font-size: 12px; color: #f1f5f9; margin-bottom: 3px; }
-    .card .meta  { font-size: 10px; color: #475569; word-break: break-all; margin-bottom: 4px; }
-    .tag { display: inline-block; font-size: 10px; background: #334155; color: #94a3b8; border-radius: 4px; padding: 1px 6px; margin: 2px 2px 2px 0; }
-    .field { margin: 6px 0; }
-    .field label { display: block; font-size: 10px; color: #64748b; margin-bottom: 2px; }
-    .field input { width: 100%; background: #0f172a; border: 1px solid #334155; border-radius: 5px; padding: 5px 7px; color: #e2e8f0; font-size: 11px; }
-    .actions { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 8px; }
-    button { background: #2563eb; color: white; border: none; border-radius: 6px; padding: 6px 10px; font-size: 11px; cursor: pointer; font-weight: 600; transition: background .15s; }
-    button:hover { background: #1d4ed8; }
-    button.secondary { background: #334155; color: #cbd5e1; }
-    button.secondary:hover { background: #475569; }
-    button.sm { padding: 4px 8px; font-size: 10px; }
-    .log-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px 3px; }
-    .log-header span { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
-    #log { background: #050d1a; margin: 0 14px 10px; border-radius: 8px; padding: 8px 10px; font-family: monospace; font-size: 10px; color: #475569; max-height: 100px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
-    .top-actions { display: flex; gap: 6px; padding: 6px 14px; }
-    #videos { padding-top: 4px; }
-    ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,sans-serif;font-size:13px;width:440px;background:#0f172a;color:#e2e8f0}
+    header{background:#1e293b;padding:10px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #334155}
+    header h1{font-size:14px;font-weight:700;color:#f1f5f9}
+    header .ver{font-size:10px;color:#475569;margin-left:auto;background:#0f172a;padding:2px 6px;border-radius:4px}
+    .section{padding:10px 14px;border-bottom:1px solid #1e293b}
+    .section label{display:block;font-size:10px;color:#64748b;margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em}
+    .row{display:flex;gap:6px;align-items:center}
+    .row input{flex:1;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:6px 8px;color:#e2e8f0;font-size:12px}
+    .info{font-size:10px;color:#475569;margin-top:3px}
+    #status{background:#1e293b;margin:8px 14px 4px;border-radius:8px;padding:8px 10px;font-size:11px;color:#94a3b8;line-height:1.5;word-break:break-all;min-height:32px}
+    #progressSection{display:none;margin:0 14px 8px;background:#1e293b;border-radius:8px;padding:8px 10px}
+    #progressMsg{font-size:11px;color:#7dd3fc;margin-bottom:5px}
+    #progressTrack{background:#0f172a;border-radius:99px;height:6px;overflow:hidden}
+    #progressBar{height:6px;background:linear-gradient(90deg,#2563eb,#06b6d4);border-radius:99px;width:0%;transition:width .4s ease}
+    .note{margin:0 14px 8px;background:#1c2a1a;border:1px solid #166534;border-radius:8px;padding:8px 10px;font-size:10px;color:#86efac;line-height:1.6;display:none}
+    .note strong{color:#4ade80}
+    .note code{background:#0f172a;padding:1px 4px;border-radius:3px;font-size:9px}
+    .top-actions{display:flex;gap:6px;padding:6px 14px}
+    .card{background:#1e293b;border:1px solid #334155;border-radius:10px;margin:0 14px 10px;padding:10px 12px}
+    .card .title{font-weight:600;font-size:12px;color:#f1f5f9;margin-bottom:3px}
+    .card .meta{font-size:10px;color:#475569;word-break:break-all;margin-bottom:4px}
+    .tags{margin:3px 0 6px}
+    .tag{display:inline-block;font-size:10px;background:#334155;color:#94a3b8;border-radius:4px;padding:1px 6px;margin:1px 2px 1px 0}
+    .tag.blue{background:#1e3a5f;color:#93c5fd}
+    .field{margin:5px 0}
+    .field label{display:block;font-size:10px;color:#64748b;margin-bottom:2px}
+    .field input{width:100%;background:#0f172a;border:1px solid #334155;border-radius:5px;padding:5px 7px;color:#e2e8f0;font-size:11px}
+    .actions{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
+    button{background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;font-weight:600;transition:background .15s}
+    button:hover{background:#1d4ed8}
+    button.sec{background:#334155;color:#cbd5e1}
+    button.sec:hover{background:#475569}
+    button.purple{background:#4c1d95;color:#ddd6fe}
+    button.purple:hover{background:#5b21b6}
+    button.sm{padding:4px 8px;font-size:10px}
+    .log-header{display:flex;align-items:center;justify-content:space-between;padding:6px 14px 3px}
+    .log-header span{font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.05em}
+    #log{background:#050d1a;margin:0 14px 10px;border-radius:8px;padding:8px 10px;font-family:monospace;font-size:10px;color:#475569;max-height:100px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+    ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#334155;border-radius:2px}
+    #videos{padding-top:4px}
   </style>
 </head>
 <body>
 <header>
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="#60a5fa" stroke="none"/></svg>
-  <h1>Vimeo Downloader</h1>
-  <span>v6.5 &bull; sin dependencias</span>
+  <h1>Vimeo Owned Downloader</h1>
+  <span class="ver">v7.0 &bull; blindada</span>
 </header>
 
 <div class="section">
   <label>Dominio permitido</label>
   <div class="row">
-    <input type="text" id="allowedHost" placeholder="www.sdaeducation.com">
+    <input type="text" id="allowedHost" placeholder="www.tudominio.com">
     <button id="saveHost" class="sm">Guardar</button>
   </div>
   <div class="info" id="hostInfo">Dominio: sin configurar</div>
 </div>
 
-<div id="status">Iniciando...</div>
+<div id="status">Iniciando…</div>
 
 <div id="progressSection">
-  <div id="progressMsg">Preparando...</div>
+  <div id="progressMsg">Preparando…</div>
   <div id="progressTrack"><div id="progressBar"></div></div>
 </div>
 
-<div class="note" id="tsNote" style="display:none">
+<div class="note" id="tsNote">
   <strong>&#9432; Archivo .ts descargado</strong><br>
-  El video HLS se descarga en formato <strong>.ts</strong> (MPEG-2 Transport Stream).<br>
-  &bull; <strong>VLC</strong>, MPC-HC y la mayoria de reproductores lo abren directamente.<br>
-  &bull; Para convertir a MP4: arrastra el .ts a <strong>VLC &rarr; Convertir/Guardar</strong>.<br>
-  &bull; O con ffmpeg: <code style="background:#0f172a;padding:1px 4px;border-radius:3px">ffmpeg -i archivo.ts -c copy salida.mp4</code>
+  El video se descargó en formato <strong>.ts</strong> (MPEG-2 Transport Stream).<br>
+  &bull; <strong>VLC</strong>, MPC-HC, PotPlayer lo reproducen directo.<br>
+  &bull; Convertir a MP4 con VLC: Medios → Convertir/Guardar → Perfil: H264+MP3 (MP4)<br>
+  &bull; Con ffmpeg: <code>ffmpeg -i video.ts -c copy salida.mp4</code>
 </div>
 
 <div class="top-actions">
@@ -81,7 +86,7 @@
 
 <div class="log-header">
   <span>Actividad</span>
-  <button id="clearLog" class="sm secondary">Limpiar</button>
+  <button id="clearLog" class="sm sec">Limpiar</button>
 </div>
 <div id="log">Sin actividad.</div>
 
