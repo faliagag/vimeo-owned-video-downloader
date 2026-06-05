@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Vimeo Owned Video Downloader",
-  "version": "6.4.0",
-  "description": "Descarga y convierte videos propios embebidos desde Vimeo. Convierte HLS a MP4 directamente en el navegador.",
-  "permissions": ["activeTab", "scripting", "downloads", "storage", "tabs", "offscreen"],
+  "version": "6.5.0",
+  "description": "Descarga y convierte videos propios desde Vimeo. Convierte HLS a MP4 directamente en el navegador sin dependencias externas.",
+  "permissions": ["activeTab", "scripting", "downloads", "storage", "tabs"],
   "host_permissions": [
     "https://player.vimeo.com/*",
     "https://*.vimeo.com/*",
@@ -33,12 +33,6 @@
       "run_at": "document_start",
       "all_frames": true,
       "world": "MAIN"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": ["offscreen.html"],
-      "matches": ["<all_urls>"]
     }
   ]
 }
