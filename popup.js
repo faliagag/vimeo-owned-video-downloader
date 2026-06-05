@@ -1,4 +1,4 @@
-/* popup.js v6.3 */
+/* popup.js v6.4 */
 const statusEl    = document.getElementById('status');
 const videosEl    = document.getElementById('videos');
 const hostInput   = document.getElementById('allowedHost');
@@ -7,13 +7,13 @@ const saveHostBtn = document.getElementById('saveHost');
 const refreshBtn  = document.getElementById('refresh');
 const clearLogBtn = document.getElementById('clearLog');
 const logEl       = document.getElementById('log');
-const hlsSectionEl= document.getElementById('hlsSection');
-const hlsUrlEl    = document.getElementById('hlsUrl');
-const hlsTitleEl  = document.getElementById('hlsTitle');
-const copyHlsBtn  = document.getElementById('copyHls');
+const progressEl  = document.getElementById('progressSection');
+const progressBar = document.getElementById('progressBar');
+const progressMsg = document.getElementById('progressMsg');
 
 let _tabId = null;
 let _pageUrl = null;
+let _converting = false;
 
 function normalizeHost(v) {
   return (v || '').trim().replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
@@ -33,26 +33,33 @@ async function loadLog() {
   renderLog(activityLog || []);
 }
 
-async function checkHlsSection() {
-  const { lastHlsUrl, lastHlsTitle } = await chrome.storage.local.get(['lastHlsUrl', 'lastHlsTitle']);
-  if (lastHlsUrl) {
-    hlsSectionEl.style.display = 'block';
-    hlsUrlEl.value   = lastHlsUrl;
-    hlsTitleEl.value = lastHlsTitle || 'video';
-  } else {
-    hlsSectionEl.style.display = 'none';
+/* Escuchar progreso de conversion desde background */
+chrome.runtime.onMessage.addListener(function(msg) {
+  if (msg && msg.type === 'CONVERT_PROGRESS') {
+    setProgress(msg.message);
   }
-}
+});
 
-if (copyHlsBtn) {
-  copyHlsBtn.addEventListener('click', async () => {
-    const url = hlsUrlEl.value;
-    if (!url) return;
-    await navigator.clipboard.writeText(url);
-    copyHlsBtn.textContent = '\u2705 Copiado';
-    setTimeout(() => { copyHlsBtn.textContent = 'Copiar URL HLS'; }, 2000);
-    appendLog('COPY HLS · ' + url.slice(0, 80));
-  });
+function setProgress(text) {
+  if (!text) { progressEl.style.display = 'none'; return; }
+  progressEl.style.display = 'block';
+  progressMsg.textContent = text;
+  /* Estimar porcentaje desde el texto */
+  var pct = 0;
+  var m = text.match(/(\d+)%/);
+  if (m) pct = parseInt(m[1]);
+  else if (/listo|completada|descarga/i.test(text)) pct = 100;
+  else if (/convirtiendo ts/i.test(text)) pct = 80;
+  else if (/segmentos descargados/i.test(text)) pct = 65;
+  else if (/segmento (\d+)\/(\d+)/i.test(text)) {
+    var sm = text.match(/segmento (\d+)\/(\d+)/i);
+    if (sm) pct = Math.round(parseInt(sm[1]) / parseInt(sm[2]) * 60);
+  } else if (/manifiesto|variante/i.test(text)) pct = 5;
+  else if (/cargando ffmpeg/i.test(text)) pct = 2;
+  progressBar.style.width = pct + '%';
+  if (pct === 100) {
+    setTimeout(function() { progressEl.style.display = 'none'; }, 3000);
+  }
 }
 
 function buildCard(video, idx) {
@@ -74,40 +81,42 @@ function buildCard(video, idx) {
 
   const nameField = document.createElement('div');
   nameField.className = 'field';
-  nameField.innerHTML = `<label>Nombre archivo</label><input type="text" value="${(video.titleHint || 'video-' + video.vimeoId).replace(/"/g, '&quot;')}">`;
+  nameField.innerHTML = `<label>Nombre del archivo</label><input type="text" value="${(video.titleHint || 'video-' + video.vimeoId).replace(/"/g, '&quot;')}">` ;
   const filenameInput = nameField.querySelector('input');
-
-  const qualField = document.createElement('div');
-  qualField.className = 'field';
-  qualField.innerHTML = `<label>Calidad preferida</label><select>
-    <option value="best">Mejor disponible</option>
-    <option value="1080">1080p</option>
-    <option value="720">720p</option>
-    <option value="480">480p</option>
-    <option value="360">360p</option>
-  </select>`;
-  const qualSelect = qualField.querySelector('select');
 
   const actions = document.createElement('div');
   actions.className = 'actions';
 
-  /* Descargar */
+  /* Boton principal: Descargar / Convertir */
   const btnDl = document.createElement('button');
-  btnDl.textContent = '\u2b07 Descargar';
+  btnDl.textContent = '\u2b07 Descargar / Convertir';
   btnDl.onclick = async () => {
+    if (_converting) { statusEl.textContent = '\u23f3 Ya hay una conversion en curso...'; return; }
     statusEl.textContent = 'Preparando...';
-    const payload = { ...video, tabId: _tabId, pageUrl: _pageUrl, preferredQuality: qualSelect.value, preferredName: filenameInput.value };
+    const payload = { ...video, tabId: _tabId, pageUrl: _pageUrl, preferredName: filenameInput.value };
     const r = await chrome.runtime.sendMessage({ type: 'TRY_DOWNLOAD', payload });
-    statusEl.textContent = r.message || '...';
-    if (r.needsHelper && r.hlsUrl) {
-      await chrome.storage.local.set({ lastHlsUrl: r.hlsUrl, lastHlsTitle: filenameInput.value });
-      await checkHlsSection();
-      statusEl.textContent = '\u26a0\ufe0f HLS detectado. Copia la URL y usa yt-dlp (ver instrucciones abajo).';
+
+    if (r.converting && r.hlsUrl) {
+      /* Iniciar conversion HLS en offscreen */
+      _converting = true;
+      statusEl.textContent = r.message;
+      setProgress('Iniciando...');
+      appendLog('CONV START \u00b7 ' + filenameInput.value);
+      const cr = await chrome.runtime.sendMessage({
+        type: 'CONVERT_HLS',
+        payload: { hlsUrl: r.hlsUrl, title: r.title || filenameInput.value, referer: _pageUrl }
+      });
+      _converting = false;
+      setProgress(cr.ok ? cr.message : null);
+      statusEl.textContent = cr.message || '...';
+      appendLog((cr.ok ? 'CONV OK' : 'CONV ERR') + ' \u00b7 ' + filenameInput.value + ' \u00b7 ' + cr.message);
+    } else {
+      statusEl.textContent = r.message || '...';
+      appendLog((r.ok ? 'OK' : 'ERR') + ' \u00b7 ' + filenameInput.value + ' \u00b7 ' + r.message);
     }
-    appendLog((r.ok ? 'OK' : r.needsHelper ? 'HLS' : 'ERR') + ' \u00b7 ' + filenameInput.value + ' \u00b7 ' + r.message);
   };
 
-  /* Diagnostico */
+  /* Boton diagnostico */
   const btnDiag = document.createElement('button');
   btnDiag.className = 'secondary';
   btnDiag.textContent = '\ud83d\udd0d Diagn\u00f3stico';
@@ -121,35 +130,25 @@ function buildCard(video, idx) {
   /* Config RAW */
   const btnRaw = document.createElement('button');
   btnRaw.className = 'secondary';
-  btnRaw.style.background = '#7c3aed';
-  btnRaw.textContent = '\ud83d\udd2c Ver config';
+  btnRaw.style.background = '#4c1d95';
+  btnRaw.textContent = '\ud83d\udd2c Config';
   btnRaw.onclick = async () => {
-    statusEl.textContent = 'Inspeccionando...';
     const r = await chrome.runtime.sendMessage({ type: 'GET_RAW_CONFIG', payload: { ...video, tabId: _tabId, pageUrl: _pageUrl } });
-    if (!r.ok) { statusEl.textContent = r.message; appendLog('RAW ERR \u00b7 ' + r.message); return; }
-    const info = 'CLAVES: ' + r.rawKeys.join(', ') + ' | FILES: ' + r.filesKeys.join(', ') + ' | CANDIDATOS: ' + r.candidates.length + ' | ' + r.candidates.map(c => '[' + c.source + '] ' + c.quality + (c.height ? 'p' : '') + ' ' + (c.url || '').slice(0, 50)).join(' || ');
+    if (!r.ok) { statusEl.textContent = r.message; return; }
+    const info = 'FILES: ' + r.filesKeys.join(', ') + ' | CANDIDATOS: ' + r.candidates.length + ' | ' + r.candidates.map(c => '[' + c.source + '] ' + c.quality + ' ' + (c.url||'').slice(0,50)).join(' || ');
     statusEl.textContent = info;
-    appendLog('RAW \u00b7 ' + (r.videoTitle || video.vimeoId) + ' \u00b7 ' + info);
-    /* Si hay HLS, guardarlo automaticamente */
-    const hlsCand = r.candidates.find(c => c.source === 'hls');
-    if (hlsCand) {
-      await chrome.storage.local.set({ lastHlsUrl: hlsCand.url, lastHlsTitle: filenameInput.value });
-      await checkHlsSection();
-    }
+    appendLog('RAW \u00b7 ' + (r.videoTitle||video.vimeoId) + ' \u00b7 ' + info);
   };
 
   actions.append(btnDl, btnDiag, btnRaw);
-  card.append(title, meta, tags, nameField, qualField, actions);
+  card.append(title, meta, tags, nameField, actions);
   return card;
 }
 
 function render(embeds) {
   videosEl.innerHTML = '';
-  if (!embeds || !embeds.length) {
-    statusEl.textContent = '\u26a0\ufe0f Sin embeds detectados. Recarga la pagina.';
-    return;
-  }
-  statusEl.textContent = `\u2705 ${embeds.length} embed(s) detectado(s).`;
+  if (!embeds || !embeds.length) { statusEl.textContent = '\u26a0\ufe0f Sin embeds detectados. Recarga la pagina.'; return; }
+  statusEl.textContent = '\u2705 ' + embeds.length + ' embed(s) detectado(s).';
   embeds.forEach((v, i) => videosEl.appendChild(buildCard(v, i)));
 }
 
@@ -169,15 +168,13 @@ saveHostBtn.addEventListener('click', async () => {
 
 refreshBtn.addEventListener('click', init);
 clearLogBtn.addEventListener('click', async () => {
-  await chrome.storage.local.set({ activityLog: [], lastHlsUrl: null });
+  await chrome.storage.local.set({ activityLog: [] });
   renderLog([]);
-  hlsSectionEl.style.display = 'none';
 });
 
 async function init() {
   await loadHost();
   await loadLog();
-  await checkHlsSection();
   statusEl.textContent = 'Escaneando...';
   const r = await chrome.runtime.sendMessage({ type: 'GET_EMBEDS' });
   if (!r || !r.ok) { statusEl.textContent = '\u274c ' + (r && r.message || 'Error al escanear.'); return; }
