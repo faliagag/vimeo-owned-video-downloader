@@ -1,10 +1,10 @@
-/* background.js - Service Worker MV3 v6.2
- * Diagnostico muestra config RAW para identificar donde estan los archivos
+/* background.js - Service Worker MV3 v6.3
+ * Descarga HLS/DASH via helper nativo (yt-dlp o ffmpeg) o via m3u8 directo
  */
 
 function safeFilename(name) {
   return (name || 'video-vimeo')
-    .replace(/[\/\\:*?"<>|]+/g, '-')
+    .replace(/[\\/:*?"<>|]+/g, '-')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 160);
@@ -41,102 +41,51 @@ async function getEmbeds(tabId) {
 
 async function getConfig(tabId, videoId) {
   return await runInPage(tabId, async function (vid) {
-    if (typeof window.__getVimeoConfig === 'function') {
-      return await window.__getVimeoConfig(vid);
-    }
+    if (typeof window.__getVimeoConfig === 'function') return await window.__getVimeoConfig(vid);
     return { config: null, error: 'page_scanner.js no cargado. Recarga la pagina.' };
   }, [videoId]);
 }
 
-/* Busca archivos descargables en CUALQUIER lugar del config */
 function parseCandidates(config) {
   var out = [];
-
-  /* 1. progressive clasico */
   var prog = (config.request && config.request.files && config.request.files.progressive)
     || (config.files && config.files.progressive) || [];
-  if (Array.isArray(prog)) {
-    prog.forEach(function (f) {
-      if (f && f.url) out.push({
-        source: 'progressive', quality: String(f.quality || f.rendition || f.height || 'sd'),
-        height: Number(f.height || 0), mime: f.mime || f.type || 'video/mp4',
-        url: f.url, size: f.size || null
-      });
-    });
-  }
+  if (Array.isArray(prog)) prog.forEach(function (f) {
+    if (f && f.url) out.push({ source: 'progressive', quality: String(f.quality || f.height || 'sd'), height: Number(f.height || 0), mime: f.mime || 'video/mp4', url: f.url, size: f.size || null });
+  });
 
-  /* 2. download array (plan Pro/Business) */
   var dl = config.download || (config.request && config.request.files && config.request.files.download) || [];
-  if (Array.isArray(dl)) {
-    dl.forEach(function (f) {
-      if (f && (f.link || f.url)) out.push({
-        source: 'download', quality: String(f.quality || f.rendition || f.height || 'sd'),
-        height: Number(f.height || 0), mime: f.type || 'video/mp4',
-        url: f.link || f.url, size: f.size || null
-      });
-    });
-  }
+  if (Array.isArray(dl)) dl.forEach(function (f) {
+    if (f && (f.link || f.url)) out.push({ source: 'download', quality: String(f.quality || f.height || 'sd'), height: Number(f.height || 0), mime: f.type || 'video/mp4', url: f.link || f.url, size: f.size || null });
+  });
 
-  /* 3. source_files (algunos planes) */
-  var sf = config.source_files || (config.request && config.request.source_files) || [];
-  if (Array.isArray(sf)) {
-    sf.forEach(function (f) {
-      if (f && (f.url || f.link)) out.push({
-        source: 'source_file', quality: String(f.quality || f.rendition || f.height || 'original'),
-        height: Number(f.height || 0), mime: f.type || 'video/mp4',
-        url: f.url || f.link, size: f.size || null
-      });
-    });
-  }
-
-  /* 4. HLS/DASH manifests como fallback */
   var files = (config.request && config.request.files) || config.files || {};
-  if (files.hls && files.hls.cdns) {
-    Object.values(files.hls.cdns).forEach(function (c) {
-      if (c && c.url) out.push({ source: 'hls', quality: 'stream-hls', height: 0, mime: 'application/x-mpegURL', url: c.url });
-    });
-  }
-  if (files.dash && files.dash.cdns) {
-    Object.values(files.dash.cdns).forEach(function (c) {
-      if (c && c.url) out.push({ source: 'dash', quality: 'stream-dash', height: 0, mime: 'application/dash+xml', url: c.url });
-    });
-  }
+  if (files.hls && files.hls.cdns) Object.values(files.hls.cdns).forEach(function (c) {
+    if (c && c.url) out.push({ source: 'hls', quality: 'hls', height: 0, mime: 'application/x-mpegURL', url: c.url });
+  });
+  if (files.dash && files.dash.cdns) Object.values(files.dash.cdns).forEach(function (c) {
+    if (c && c.url) out.push({ source: 'dash', quality: 'dash', height: 0, mime: 'application/dash+xml', url: c.url });
+  });
 
-  /* 5. Busqueda generica: recorrer todo el config buscando URLs .mp4 */
   function deepFindMp4(obj, depth) {
     if (!obj || depth > 6) return;
-    if (typeof obj === 'string') {
-      if (/\.mp4/i.test(obj) && /^https?:\/\//.test(obj)) {
-        out.push({ source: 'deep-scan', quality: 'unknown', height: 0, mime: 'video/mp4', url: obj, size: null });
-      }
-      return;
-    }
+    if (typeof obj === 'string') { if (/\.mp4/i.test(obj) && /^https?:\/\//.test(obj)) out.push({ source: 'deep', quality: 'unknown', height: 0, mime: 'video/mp4', url: obj }); return; }
     if (Array.isArray(obj)) { obj.forEach(function (i) { deepFindMp4(i, depth + 1); }); return; }
-    if (typeof obj === 'object') { Object.values(obj).forEach(function (v) { deepFindMp4(v, depth + 1); }); }
+    if (typeof obj === 'object') Object.values(obj).forEach(function (v) { deepFindMp4(v, depth + 1); });
   }
   deepFindMp4(config, 0);
 
-  /* Deduplicar por URL */
   var seen = {};
-  return out.filter(function (c) {
-    if (!c.url || seen[c.url]) return false;
-    seen[c.url] = true;
-    return true;
-  });
+  return out.filter(function (c) { if (!c.url || seen[c.url]) return false; seen[c.url] = true; return true; });
 }
 
-function pickBest(candidates, preferred) {
-  var direct = candidates.filter(function (c) { return /progressive|download|source_file|deep-scan/.test(c.source); });
-  if (!direct.length) return null;
-  if (!preferred || preferred === 'best') {
-    return direct.sort(function (a, b) { return (b.height || 0) - (a.height || 0); })[0];
-  }
-  var target = Number(preferred);
-  var exact = direct.filter(function (c) { return Number(c.height) === target; });
-  if (exact.length) return exact.sort(function (a, b) { return (b.height || 0) - (a.height || 0); })[0];
-  var lower = direct.filter(function (c) { return Number(c.height) <= target; });
-  if (lower.length) return lower.sort(function (a, b) { return (b.height || 0) - (a.height || 0); })[0];
-  return direct.sort(function (a, b) { return (a.height || 99999) - (b.height || 99999); })[0];
+function pickBestDirect(candidates) {
+  var direct = candidates.filter(function (c) { return /progressive|download|deep/.test(c.source); });
+  return direct.sort(function (a, b) { return (b.height || 0) - (a.height || 0); })[0] || null;
+}
+
+function pickBestHls(candidates) {
+  return candidates.find(function (c) { return c.source === 'hls'; }) || null;
 }
 
 async function getActiveTab() {
@@ -144,6 +93,7 @@ async function getActiveTab() {
   return tabs && tabs[0];
 }
 
+/* ========== HANDLER PRINCIPAL ========== */
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   (async function () {
     var type    = msg && msg.type;
@@ -157,23 +107,17 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       return sendResponse({ ok: true, embeds: embeds || [], tabId: tab.id, pageUrl: tab.url });
     }
 
-    /* GET_RAW_CONFIG - para debug */
+    /* GET_RAW_CONFIG */
     if (type === 'GET_RAW_CONFIG') {
-      var result0 = await getConfig(payload.tabId, payload.vimeoId);
-      if (!result0 || !result0.config) {
-        return sendResponse({ ok: false, message: (result0 && result0.error) || 'Sin config.' });
-      }
-      /* Devolver las claves del primer nivel y los candidatos encontrados */
-      var cfg0 = result0.config;
+      var r0 = await getConfig(payload.tabId, payload.vimeoId);
+      if (!r0 || !r0.config) return sendResponse({ ok: false, message: (r0 && r0.error) || 'Sin config.' });
+      var cfg0 = r0.config;
       var cands0 = parseCandidates(cfg0);
-      var keys0 = Object.keys(cfg0);
-      var reqKeys = cfg0.request ? Object.keys(cfg0.request) : [];
-      var filesKeys = (cfg0.request && cfg0.request.files) ? Object.keys(cfg0.request.files) : (cfg0.files ? Object.keys(cfg0.files) : []);
       return sendResponse({
         ok: true,
-        rawKeys: keys0,
-        requestKeys: reqKeys,
-        filesKeys: filesKeys,
+        rawKeys: Object.keys(cfg0),
+        requestKeys: cfg0.request ? Object.keys(cfg0.request) : [],
+        filesKeys: (cfg0.request && cfg0.request.files) ? Object.keys(cfg0.request.files) : (cfg0.files ? Object.keys(cfg0.files) : []),
         candidates: cands0,
         videoTitle: (cfg0.video && cfg0.video.title) || ''
       });
@@ -182,54 +126,89 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     /* TRY_DOWNLOAD / DIAGNOSE_VIDEO */
     if (type === 'TRY_DOWNLOAD' || type === 'DIAGNOSE_VIDEO') {
       var settings = await chrome.storage.local.get(['allowedHost']);
-      if (!settings.allowedHost) {
-        return sendResponse({ ok: false, message: 'Primero guarda el dominio permitido.' });
-      }
-      if (!hostAllowed(payload.pageUrl, settings.allowedHost)) {
-        return sendResponse({ ok: false, message: 'Dominio no permitido: ' + settings.allowedHost });
-      }
+      if (!settings.allowedHost) return sendResponse({ ok: false, message: 'Primero guarda el dominio permitido.' });
+      if (!hostAllowed(payload.pageUrl, settings.allowedHost)) return sendResponse({ ok: false, message: 'Dominio no permitido.' });
       if (!payload.vimeoId) return sendResponse({ ok: false, message: 'Sin Vimeo ID.' });
 
       var result = await getConfig(payload.tabId, payload.vimeoId);
-      if (!result || !result.config) {
-        return sendResponse({ ok: false, message: '\u274c ' + ((result && result.error) || 'Sin playerConfig.') });
-      }
+      if (!result || !result.config) return sendResponse({ ok: false, message: '\u274c ' + ((result && result.error) || 'Sin playerConfig.') });
 
       var cfg = result.config;
       var candidates = parseCandidates(cfg);
-      var direct  = candidates.filter(function (c) { return /progressive|download|source_file|deep-scan/.test(c.source); });
-      var streams = candidates.filter(function (c) { return /hls|dash/.test(c.source); });
-      var videoTitle = (cfg.video && cfg.video.title) || 'sin titulo';
+      var direct = pickBestDirect(candidates);
+      var hls    = pickBestHls(candidates);
+      var videoTitle = (cfg.video && cfg.video.title) || ('video-' + payload.vimeoId);
+      var title = safeFilename(payload.preferredName || videoTitle);
 
       if (type === 'DIAGNOSE_VIDEO') {
-        var quals = direct.map(function (d) { return '[' + d.source + '] ' + d.quality + (d.height ? 'p' : ''); }).join(' | ') || 'ninguna';
-        var hlsUrl = streams.length ? streams[0].url.slice(0, 80) + '...' : 'no';
-        var diagMsg = '\u2705 "' + videoTitle + '" | MP4: ' + direct.length + ' | Stream: ' + streams.length + ' | Calidades: ' + quals + ' | HLS: ' + hlsUrl;
-        return sendResponse({ ok: true, message: diagMsg });
+        var msg2 = '\u2705 "' + videoTitle + '" | MP4 directo: ' + (direct ? direct.source + ' ' + direct.quality : 'NO') + ' | HLS: ' + (hls ? hls.url.slice(0, 70) + '...' : 'NO');
+        return sendResponse({ ok: true, message: msg2 });
       }
 
-      var chosen = pickBest(candidates, payload.preferredQuality);
-      var title  = safeFilename(payload.preferredName || videoTitle || ('video-' + payload.vimeoId));
-
-      if (chosen && chosen.url) {
-        var ext = /webm/i.test(chosen.mime || '') ? 'webm' : 'mp4';
+      /* --- INTENTAR MP4 DIRECTO primero --- */
+      if (direct && direct.url) {
         try {
-          await chrome.downloads.download({
-            url: chosen.url, filename: title + '.' + ext,
-            saveAs: true, conflictAction: 'uniquify'
-          });
-          var sz = chosen.size ? ' ~' + Math.round(chosen.size / 1024 / 1024) + ' MB' : '';
-          return sendResponse({ ok: true, message: '\u2705 Descarga iniciada | ' + chosen.source + ' | ' + chosen.quality + (chosen.height ? 'p' : '') + sz });
+          await chrome.downloads.download({ url: direct.url, filename: title + '.mp4', saveAs: true, conflictAction: 'uniquify' });
+          return sendResponse({ ok: true, message: '\u2705 Descarga MP4 iniciada | ' + direct.source + ' ' + direct.quality });
         } catch (e) {
-          return sendResponse({ ok: false, message: 'Error: ' + e.message });
+          return sendResponse({ ok: false, message: 'Error MP4: ' + e.message });
         }
       }
 
-      if (streams.length) {
-        return sendResponse({ ok: false, message: '\u26a0\ufe0f Solo HLS/DASH. Vimeo no expone MP4 en este plan para descarga directa.' });
+      /* --- FALLBACK: Descargar via HLS usando Native Messaging helper --- */
+      if (hls && hls.url) {
+        /* Intentar via helper nativo (requiere instalar vimeo_helper) */
+        var helperResult = await tryNativeHelper(hls.url, title, cfg.video);
+        if (helperResult.ok) return sendResponse(helperResult);
+
+        /* Si no hay helper: ofrecer el m3u8 con instrucciones */
+        return sendResponse({
+          ok: false,
+          hlsUrl: hls.url,
+          videoTitle: videoTitle,
+          needsHelper: true,
+          message: '\u26a0\ufe0f Video HLS. URL copiada al log. Usa yt-dlp para descargarlo (instrucciones en el popup).'
+        });
       }
+
       return sendResponse({ ok: false, message: '\u274c Sin archivos descargables.' });
+    }
+
+    /* COPY_HLS_URL */
+    if (type === 'COPY_HLS_URL') {
+      /* Guarda la URL HLS en storage para que el popup la muestre */
+      await chrome.storage.local.set({ lastHlsUrl: payload.url, lastHlsTitle: payload.title });
+      return sendResponse({ ok: true });
     }
   })();
   return true;
 });
+
+/* Intentar Native Messaging con helper externo */
+async function tryNativeHelper(hlsUrl, title, videoMeta) {
+  return new Promise(function (resolve) {
+    try {
+      var port = chrome.runtime.connectNative('com.sdaeducation.vimeohelper');
+      var timeout = setTimeout(function () {
+        try { port.disconnect(); } catch (_) {}
+        resolve({ ok: false, message: 'Helper no disponible.' });
+      }, 4000);
+      port.onMessage.addListener(function (response) {
+        clearTimeout(timeout);
+        port.disconnect();
+        if (response && response.ok) {
+          resolve({ ok: true, message: '\u2705 Descarga iniciada via helper: ' + (response.file || title + '.mp4') });
+        } else {
+          resolve({ ok: false, message: 'Helper error: ' + (response && response.error || 'desconocido') });
+        }
+      });
+      port.onDisconnect.addListener(function () {
+        clearTimeout(timeout);
+        resolve({ ok: false, message: 'Helper no instalado.' });
+      });
+      port.postMessage({ action: 'download', url: hlsUrl, title: title, meta: videoMeta || {} });
+    } catch (e) {
+      resolve({ ok: false, message: 'Native messaging no disponible: ' + e.message });
+    }
+  });
+}
