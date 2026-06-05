@@ -80,7 +80,17 @@ function render(videos, tab) {
 
     const qualityField = document.createElement('div');
     qualityField.className = 'field';
-    qualityField.innerHTML = `<label>Calidad preferida</label><select><option value="best">La mejor disponible</option><option value="2160">2160p</option><option value="1440">1440p</option><option value="1080">1080p</option><option value="720">720p</option><option value="540">540p</option><option value="480">480p</option><option value="360">360p</option><option value="240">240p</option></select>`;
+    qualityField.innerHTML = `<label>Calidad preferida</label><select>
+      <option value="best">La mejor disponible</option>
+      <option value="2160">2160p</option>
+      <option value="1440">1440p</option>
+      <option value="1080">1080p</option>
+      <option value="720">720p</option>
+      <option value="540">540p</option>
+      <option value="480">480p</option>
+      <option value="360">360p</option>
+      <option value="240">240p</option>
+    </select>`;
     const qualitySelect = qualityField.querySelector('select');
 
     const actions = document.createElement('div');
@@ -90,7 +100,14 @@ function render(videos, tab) {
     btn1.textContent = 'Descargar';
     btn1.onclick = async () => {
       statusEl.textContent = 'Preparando descarga...';
-      const payload = { ...video, pageUrl: tab.url, preferredQuality: qualitySelect.value, preferredName: filenameInput.value };
+      // FIX: se envía el tabId para que background.js pueda inyectar el fetch en la página correcta
+      const payload = {
+        ...video,
+        pageUrl: tab.url,
+        tabId: tab.id,
+        preferredQuality: qualitySelect.value,
+        preferredName: filenameInput.value
+      };
       const response = await chrome.runtime.sendMessage({ type: 'TRY_DOWNLOAD', payload });
       statusEl.textContent = response?.message || 'Proceso finalizado.';
       await appendLog(`${response?.ok ? 'OK' : 'ERROR'} · ${payload.preferredName} · ${response?.message || 'sin detalle'}`);
@@ -100,7 +117,11 @@ function render(videos, tab) {
     btn2.className = 'secondary';
     btn2.textContent = 'Diagnóstico';
     btn2.onclick = async () => {
-      const response = await chrome.runtime.sendMessage({ type: 'DIAGNOSE_VIDEO', payload: { ...video, pageUrl: tab.url } });
+      // FIX: se envía el tabId también en el diagnóstico
+      const response = await chrome.runtime.sendMessage({
+        type: 'DIAGNOSE_VIDEO',
+        payload: { ...video, pageUrl: tab.url, tabId: tab.id }
+      });
       statusEl.textContent = response?.message || 'Diagnóstico ejecutado.';
       await appendLog(`INFO · diagnóstico ${video.vimeoId || ''} · ${response?.message || 'sin detalle'}`);
     };
