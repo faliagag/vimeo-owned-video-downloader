@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Vimeo Owned Video Downloader",
-  "version": "5.0.0",
-  "description": "Descarga videos propios embebidos desde Vimeo. Lee config directamente del iframe de Vimeo sin fetch externo.",
+  "version": "5.1.0",
+  "description": "Descarga videos propios embebidos desde Vimeo. Lee playerConfig directo del iframe sin fetch externo.",
   "permissions": ["activeTab", "scripting", "downloads", "storage", "tabs"],
   "host_permissions": [
     "https://player.vimeo.com/*",
@@ -22,7 +22,8 @@
       "matches": ["https://*/*", "http://*/*"],
       "js": ["content.js"],
       "run_at": "document_idle",
-      "all_frames": false
+      "all_frames": false,
+      "world": "MAIN"
     },
     {
       "matches": ["https://player.vimeo.com/*"],
