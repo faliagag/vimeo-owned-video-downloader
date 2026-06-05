@@ -1,8 +1,8 @@
-/* background.js v8.0
- * Arquitectura:
- * - Inyecta floater.js en la pestaña del usuario (barra flotante persistente)
- * - La descarga corre en el SW independiente del popup
- * - Progreso enviado TANTO al popup (si está abierto) COMO al floater en la pestaña
+/* background.js v8.1
+ * FIXES:
+ * 1. sendProgress ahora incluye __videoId y __title en cada mensaje
+ * 2. ensureFloater usa flag en la tab para no inyectar dos veces
+ * 3. CONVERT_HLS recibe videoId y lo pasa a todas las llamadas de progreso
  */
 'use strict';
 
@@ -28,28 +28,23 @@ async function getActiveTab() {
   return tabs?.[0] || null;
 }
 
-// Enviar progreso al popup Y al floater en la pestaña
-function sendProgress(msg, pct, tabId) {
-  const data = { type: 'CONVERT_PROGRESS', message: msg, pct: pct ?? -1 };
+// FIX: incluir siempre videoId y title en el mensaje de progreso
+function sendProgress(msg, pct, tabId, videoId, title) {
+  const data = { type: 'CONVERT_PROGRESS', message: msg, pct: pct ?? -1, __videoId: videoId || '', __title: title || '' };
   chrome.runtime.sendMessage(data).catch(() => {});
   if (tabId) chrome.tabs.sendMessage(tabId, data).catch(() => {});
 }
 
-// Inyectar el floater en la pestaña si no está ya
+// FIX: usar flag en la pagina para no inyectar floater dos veces
 async function ensureFloater(tabId) {
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ['floater.js']
-    });
-    await chrome.scripting.insertCSS({
-      target: { tabId },
-      files: ['floater.css']
-    });
+    const alreadyInjected = await runInPage(tabId, () => !!window.__VIMEO_FLOATER_ACTIVE__);
+    if (alreadyInjected) return;
+    await chrome.scripting.insertCSS({ target: { tabId }, files: ['floater.css'] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['floater.js'] });
   } catch (_) {}
 }
 
-// Escanear embeds
 async function getEmbeds(tabId) {
   return runInPage(tabId, () =>
     typeof window.__scanVimeoEmbedsNow === 'function'
@@ -66,7 +61,6 @@ async function getConfig(tabId, videoId) {
   );
 }
 
-// Parsear candidatos
 function parseCandidates(config) {
   const out = [], seen = new Set();
   function add(c) { if (c?.url && !seen.has(c.url)) { seen.add(c.url); out.push(c); } }
@@ -90,8 +84,7 @@ function parseCandidates(config) {
 function pickBestDirect(c) { return c.filter(x => /progressive|download|deep/.test(x.source)).sort((a, b) => (b.height || 0) - (a.height || 0))[0] || null; }
 function pickBestHls(c) { return c.find(x => x.source === 'hls') || null; }
 
-// Resolver manifiesto HLS
-async function resolveM3u8(url, referer, tabId) {
+async function resolveM3u8(url, referer, tabId, videoId, title) {
   const h = referer ? { 'Referer': referer } : {};
   const res = await fetch(url, { headers: h });
   if (!res.ok) throw new Error('Manifiesto HTTP ' + res.status);
@@ -110,14 +103,13 @@ async function resolveM3u8(url, referer, tabId) {
   if (!variants.length) throw new Error('Sin variantes en el manifiesto.');
   variants.sort((a, b) => b.bw - a.bw);
   const best = variants[0].uri.startsWith('http') ? variants[0].uri : new URL(variants[0].uri, url).href;
-  sendProgress('Variante ' + Math.round(variants[0].bw / 1000) + ' kbps seleccionada…', 5, tabId);
+  sendProgress('Variante ' + Math.round(variants[0].bw / 1000) + ' kbps…', 5, tabId, videoId, title);
   const res2 = await fetch(best, { headers: h });
   if (!res2.ok) throw new Error('Variante HTTP ' + res2.status);
   return { url: best, text: await res2.text() };
 }
 
-// Descargar segmentos
-async function downloadSegments(manifestUrl, manifestText, referer, tabId) {
+async function downloadSegments(manifestUrl, manifestText, referer, tabId, videoId, title) {
   const h = referer ? { 'Referer': referer } : {};
   const lines = manifestText.split('\n').map(l => l.trim());
   const segs = lines.filter(l => l && !l.startsWith('#'));
@@ -128,7 +120,7 @@ async function downloadSegments(manifestUrl, manifestText, referer, tabId) {
     const segUrl = segs[j].startsWith('http') ? segs[j] : base + segs[j];
     if (j % 8 === 0 || j === segs.length - 1) {
       const pct = Math.round((j / segs.length) * 60) + 5;
-      sendProgress(`Segmento ${j + 1} / ${segs.length}…`, pct, tabId);
+      sendProgress(`Seg ${j + 1}/${segs.length}`, pct, tabId, videoId, title);
     }
     let attempts = 3;
     while (attempts-- > 0) {
@@ -138,69 +130,66 @@ async function downloadSegments(manifestUrl, manifestText, referer, tabId) {
         const buf = new Uint8Array(await r.arrayBuffer());
         chunks.push(buf); totalBytes += buf.length; break;
       } catch (e) {
-        if (attempts === 0) throw new Error(`Segmento ${j + 1} fallido: ${e.message}`);
+        if (attempts === 0) throw new Error(`Seg ${j + 1} fallido: ${e.message}`);
         await new Promise(r => setTimeout(r, 800));
       }
     }
   }
-  sendProgress('Ensamblando ' + segs.length + ' segs (' + Math.round(totalBytes / 1024 / 1024) + ' MB)…', 68, tabId);
+  const sizeMB = Math.round(totalBytes / 1024 / 1024);
+  sendProgress(`Ensamblando (${sizeMB} MB)…`, 68, tabId, videoId, title);
   const merged = new Uint8Array(totalBytes);
   let offset = 0;
   for (const c of chunks) { merged.set(c, offset); offset += c.length; }
   return merged;
 }
 
-// Disparar descarga vía tab auxiliar (Blob URL real, sin límite 2MB)
-async function triggerBlobDownload(uint8array, filename, mime, tabId) {
+async function triggerBlobDownload(uint8array, filename, mime, tabId, videoId, title) {
   return new Promise(async (resolve, reject) => {
-    sendProgress('Preparando descarga…', 72, tabId);
+    sendProgress('Preparando descarga…', 72, tabId, videoId, title);
     const tab = await chrome.tabs.create({ url: chrome.runtime.getURL('downloader.html'), active: false });
     const dlTabId = tab.id;
     function onReady(msg, sender) {
       if (msg?.type === 'DOWNLOADER_READY' && sender.tab?.id === dlTabId) {
         chrome.runtime.onMessage.removeListener(onReady);
-        sendProgress('Transfiriendo buffer…', 76, tabId);
-        chrome.tabs.sendMessage(dlTabId, {
-          type: 'TRIGGER_DOWNLOAD', filename, mime,
-          buffer: Array.from(uint8array)
-        }).then(() => {
-          function onDone(m2, s2) {
-            if ((m2?.type === 'DOWNLOAD_STARTED' || m2?.type === 'DOWNLOAD_ERROR') && s2.tab?.id === dlTabId) {
-              chrome.runtime.onMessage.removeListener(onDone);
-              chrome.tabs.remove(dlTabId).catch(() => {});
-              if (m2.type === 'DOWNLOAD_STARTED') resolve();
-              else reject(new Error(m2.error || 'Error en descargador.'));
+        sendProgress('Transfiriendo buffer…', 76, tabId, videoId, title);
+        chrome.tabs.sendMessage(dlTabId, { type: 'TRIGGER_DOWNLOAD', filename, mime, buffer: Array.from(uint8array) })
+          .then(() => {
+            function onDone(m2, s2) {
+              if ((m2?.type === 'DOWNLOAD_STARTED' || m2?.type === 'DOWNLOAD_ERROR') && s2.tab?.id === dlTabId) {
+                chrome.runtime.onMessage.removeListener(onDone);
+                chrome.tabs.remove(dlTabId).catch(() => {});
+                if (m2.type === 'DOWNLOAD_STARTED') resolve();
+                else reject(new Error(m2.error || 'Error en descargador.'));
+              }
             }
-          }
-          chrome.runtime.onMessage.addListener(onDone);
-          setTimeout(() => { chrome.runtime.onMessage.removeListener(onDone); chrome.tabs.remove(dlTabId).catch(() => {}); reject(new Error('Timeout descargador 30s.')); }, 30000);
-        }).catch(e => { chrome.tabs.remove(dlTabId).catch(() => {}); reject(new Error('sendMessage: ' + e.message)); });
+            chrome.runtime.onMessage.addListener(onDone);
+            setTimeout(() => { chrome.runtime.onMessage.removeListener(onDone); chrome.tabs.remove(dlTabId).catch(() => {}); reject(new Error('Timeout 30s.')); }, 30000);
+          })
+          .catch(e => { chrome.tabs.remove(dlTabId).catch(() => {}); reject(new Error('sendMessage: ' + e.message)); });
       }
     }
     chrome.runtime.onMessage.addListener(onReady);
-    setTimeout(() => { chrome.runtime.onMessage.removeListener(onReady); chrome.tabs.remove(dlTabId).catch(() => {}); reject(new Error('Timeout: downloader.html no cargó en 15s.')); }, 15000);
+    setTimeout(() => { chrome.runtime.onMessage.removeListener(onReady); chrome.tabs.remove(dlTabId).catch(() => {}); reject(new Error('Timeout downloader 15s.')); }, 15000);
   });
 }
 
-// Conversor HLS → descarga
-async function convertHls(hlsUrl, title, referer, tabId) {
-  sendProgress('Resolviendo manifiesto HLS…', 2, tabId);
-  const manifest = await resolveM3u8(hlsUrl, referer, tabId);
-  const tsData = await downloadSegments(manifest.url, manifest.text, referer, tabId);
+async function convertHls(hlsUrl, title, referer, tabId, videoId) {
+  sendProgress('Resolviendo manifiesto…', 2, tabId, videoId, title);
+  const manifest = await resolveM3u8(hlsUrl, referer, tabId, videoId, title);
+  const tsData = await downloadSegments(manifest.url, manifest.text, referer, tabId, videoId, title);
   const sizeMB = Math.round(tsData.length / 1024 / 1024);
-  await triggerBlobDownload(tsData, title + '.ts', 'video/mp2t', tabId);
-  sendProgress('✅ Descarga iniciada (' + sizeMB + ' MB)', 100, tabId);
+  await triggerBlobDownload(tsData, title + '.ts', 'video/mp2t', tabId, videoId, title);
+  sendProgress('\u2705 Descarga iniciada (' + sizeMB + ' MB)', 100, tabId, videoId, title);
   return { ok: true, size: sizeMB, filename: title + '.ts' };
 }
 
-// MESSAGE HANDLER
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     const { type, payload } = msg || {};
 
     if (type === 'GET_EMBEDS') {
       const tab = await getActiveTab();
-      if (!tab) return sendResponse({ ok: false, message: 'Sin pestaña activa.' });
+      if (!tab) return sendResponse({ ok: false, message: 'Sin pesta\u00f1a activa.' });
       const embeds = await getEmbeds(tab.id);
       return sendResponse({ ok: true, embeds: embeds || [], tabId: tab.id, pageUrl: tab.url });
     }
@@ -225,7 +214,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!hostAllowed(payload.pageUrl, allowedHost)) return sendResponse({ ok: false, message: 'Dominio no permitido: ' + new URL(payload.pageUrl).hostname });
       if (!payload.vimeoId) return sendResponse({ ok: false, message: 'Sin Vimeo ID.' });
       const result = await getConfig(payload.tabId, payload.vimeoId);
-      if (!result?.config) return sendResponse({ ok: false, message: '❌ Sin playerConfig. ¿Está interceptando el iframe?' });
+      if (!result?.config) return sendResponse({ ok: false, message: '\u274c Sin playerConfig.' });
       const cfg = result.config;
       const candidates = parseCandidates(cfg);
       const direct = pickBestDirect(candidates);
@@ -233,28 +222,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const videoTitle = cfg?.video?.title || ('video-' + payload.vimeoId);
       const title = safeFilename(payload.preferredName || videoTitle);
       if (type === 'DIAGNOSE_VIDEO') {
-        return sendResponse({ ok: true, message: `✅ "${videoTitle}" | MP4: ${direct ? direct.source + ' ' + direct.quality : 'NO'} | HLS: ${hls ? 'SÍ' : 'NO'} | Candidatos: ${candidates.length}` });
+        return sendResponse({ ok: true, message: `\u2705 "${videoTitle}" | MP4: ${direct ? direct.source + ' ' + direct.quality : 'NO'} | HLS: ${hls ? 'S\u00cd' : 'NO'} | Candidatos: ${candidates.length}` });
       }
       if (direct?.url) {
         try {
           await chrome.downloads.download({ url: direct.url, filename: title + '.mp4', saveAs: false, conflictAction: 'uniquify' });
-          sendProgress('✅ Descarga MP4 directa iniciada.', 100, payload.tabId);
-          return sendResponse({ ok: true, message: '✅ Descarga MP4 directa iniciada.' });
+          sendProgress('\u2705 MP4 directo iniciado.', 100, payload.tabId, payload.vimeoId, title);
+          return sendResponse({ ok: true, message: '\u2705 Descarga MP4 directa iniciada.' });
         } catch (e) { return sendResponse({ ok: false, message: 'Error MP4: ' + e.message }); }
       }
       if (hls?.url) {
-        return sendResponse({ ok: true, converting: true, hlsUrl: hls.url, title, pageUrl: payload.pageUrl, tabId: payload.tabId, message: '⏳ Iniciando descarga HLS…' });
+        return sendResponse({ ok: true, converting: true, hlsUrl: hls.url, title, pageUrl: payload.pageUrl, tabId: payload.tabId, videoId: payload.vimeoId, message: '\u23f3 Iniciando HLS\u2026' });
       }
-      return sendResponse({ ok: false, message: '❌ Sin archivos descargables. Usa 🔬 Config.' });
+      return sendResponse({ ok: false, message: '\u274c Sin archivos descargables.' });
     }
 
     if (type === 'CONVERT_HLS') {
       try {
-        const res = await convertHls(payload.hlsUrl, payload.title, payload.referer, payload.tabId);
-        return sendResponse({ ok: true, message: `✅ ${res.filename} (${res.size} MB)` });
+        const res = await convertHls(payload.hlsUrl, payload.title, payload.referer, payload.tabId, payload.videoId);
+        return sendResponse({ ok: true, message: `\u2705 ${res.filename} (${res.size} MB)` });
       } catch (e) {
-        sendProgress(null, -1, payload.tabId);
-        return sendResponse({ ok: false, message: '❌ ' + e.message });
+        sendProgress(null, -1, payload.tabId, payload.videoId, payload.title);
+        return sendResponse({ ok: false, message: '\u274c ' + e.message });
       }
     }
   })();
