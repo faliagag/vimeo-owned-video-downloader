@@ -1,8 +1,12 @@
-/* background.js v8.2
- * Igual que v8.1 pero ensureFloater ahora verifica el DOM (id fijo) en lugar de window flag.
- * Esto resuelve el problema de pestanas abiertas antes de recargar la extension.
+/* background.js v8.3
+ * - triggerBlobDownload: usa protocolo chunked (DOWNLOAD_META + DOWNLOAD_CHUNK x N + DOWNLOAD_FINALIZE)
+ *   en vez de Array.from(uint8array) completo -> resuelve RangeError con videos grandes
+ * - ensureFloater: verifica DOM id (no window flag)
+ * - sendProgress: siempre incluye __videoId y __title
  */
 'use strict';
+
+const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB por chunk
 
 function safeFilename(n) {
   return (n || 'video-vimeo').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 160);
@@ -32,19 +36,14 @@ function sendProgress(msg, pct, tabId, videoId, title) {
   if (tabId) chrome.tabs.sendMessage(tabId, data).catch(() => {});
 }
 
-// v8.2: verificar por id DOM, no por window flag (sobrevive recarga de extension)
 async function ensureFloater(tabId) {
   try {
     const exists = await runInPage(tabId, () => !!document.getElementById('__vdf_wrap__'));
-    if (!exists) {
-      await chrome.scripting.insertCSS({ target: { tabId }, files: ['floater.css'] }).catch(() => {});
-      await chrome.scripting.executeScript({ target: { tabId }, files: ['floater.js'] });
-    } else {
-      // Ya existe el contenedor: solo asegurarse de que el listener este activo
-      await chrome.scripting.executeScript({ target: { tabId }, files: ['floater.js'] });
-    }
+    await chrome.scripting.insertCSS({ target: { tabId }, files: ['floater.css'] }).catch(() => {});
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['floater.js'] });
+    // Si ya existia contenedor, floater.js sale temprano pero registra el listener
   } catch (e) {
-    console.warn('[VDF] ensureFloater error:', e.message);
+    console.warn('[VDF] ensureFloater:', e.message);
   }
 }
 
@@ -85,7 +84,7 @@ function parseCandidates(config) {
   return out;
 }
 function pickBestDirect(c) { return c.filter(x => /progressive|download|deep/.test(x.source)).sort((a, b) => (b.height || 0) - (a.height || 0))[0] || null; }
-function pickBestHls(c) { return c.find(x => x.source === 'hls') || null; }
+function pickBestHls(c)    { return c.find(x => x.source === 'hls') || null; }
 
 async function resolveM3u8(url, referer, tabId, videoId, title) {
   const h = referer ? { 'Referer': referer } : {};
@@ -98,7 +97,7 @@ async function resolveM3u8(url, referer, tabId, videoId, title) {
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].startsWith('#EXT-X-STREAM-INF')) {
       const bwM = lines[i].match(/BANDWIDTH=(\d+)/);
-      const bw = bwM ? parseInt(bwM[1]) : 0;
+      const bw  = bwM ? parseInt(bwM[1]) : 0;
       const uri = (lines[i + 1] || '').trim();
       if (uri && !uri.startsWith('#')) variants.push({ bw, uri });
     }
@@ -115,7 +114,7 @@ async function resolveM3u8(url, referer, tabId, videoId, title) {
 async function downloadSegments(manifestUrl, manifestText, referer, tabId, videoId, title) {
   const h = referer ? { 'Referer': referer } : {};
   const lines = manifestText.split('\n').map(l => l.trim());
-  const segs = lines.filter(l => l && !l.startsWith('#'));
+  const segs  = lines.filter(l => l && !l.startsWith('#'));
   if (!segs.length) throw new Error('Sin segmentos en el manifiesto.');
   const base = manifestUrl.substring(0, manifestUrl.lastIndexOf('/') + 1);
   const chunks = []; let totalBytes = 0;
@@ -146,33 +145,70 @@ async function downloadSegments(manifestUrl, manifestText, referer, tabId, video
   return merged;
 }
 
+// v8.3: envia el buffer en chunks de 4MB, no como Array.from completo
 async function triggerBlobDownload(uint8array, filename, mime, tabId, videoId, title) {
   return new Promise(async (resolve, reject) => {
-    sendProgress('Preparando descarga…', 72, tabId, videoId, title);
+    sendProgress('Abriendo descargador…', 72, tabId, videoId, title);
     const tab = await chrome.tabs.create({ url: chrome.runtime.getURL('downloader.html'), active: false });
     const dlTabId = tab.id;
     const cleanup = () => chrome.tabs.remove(dlTabId).catch(() => {});
-    const t1 = setTimeout(() => { chrome.runtime.onMessage.removeListener(onReady); cleanup(); reject(new Error('Timeout downloader 20s.')); }, 20000);
-    function onReady(msg, sender) {
-      if (msg?.type === 'DOWNLOADER_READY' && sender.tab?.id === dlTabId) {
-        clearTimeout(t1);
-        chrome.runtime.onMessage.removeListener(onReady);
-        sendProgress('Transfiriendo buffer…', 76, tabId, videoId, title);
-        chrome.tabs.sendMessage(dlTabId, { type: 'TRIGGER_DOWNLOAD', filename, mime, buffer: Array.from(uint8array) })
-          .then(() => {
-            const t2 = setTimeout(() => { chrome.runtime.onMessage.removeListener(onDone); cleanup(); reject(new Error('Timeout transferencia 60s.')); }, 60000);
-            function onDone(m2, s2) {
-              if ((m2?.type === 'DOWNLOAD_STARTED' || m2?.type === 'DOWNLOAD_ERROR') && s2.tab?.id === dlTabId) {
-                clearTimeout(t2);
-                chrome.runtime.onMessage.removeListener(onDone);
-                cleanup();
-                if (m2.type === 'DOWNLOAD_STARTED') resolve();
-                else reject(new Error(m2.error || 'Error en descargador.'));
-              }
-            }
-            chrome.runtime.onMessage.addListener(onDone);
-          })
-          .catch(e => { cleanup(); reject(new Error('sendMessage: ' + e.message)); });
+
+    const t1 = setTimeout(() => {
+      chrome.runtime.onMessage.removeListener(onReady);
+      cleanup();
+      reject(new Error('Timeout esperando downloader (20s).'));
+    }, 20000);
+
+    async function onReady(msg, sender) {
+      if (msg?.type !== 'DOWNLOADER_READY' || sender.tab?.id !== dlTabId) return;
+      clearTimeout(t1);
+      chrome.runtime.onMessage.removeListener(onReady);
+
+      try {
+        // 1. Enviar metadata
+        const totalChunks = Math.ceil(uint8array.length / CHUNK_SIZE);
+        sendProgress('Enviando (' + Math.round(uint8array.length / 1024 / 1024) + ' MB en ' + totalChunks + ' partes)…', 74, tabId, videoId, title);
+        await chrome.tabs.sendMessage(dlTabId, { type: 'DOWNLOAD_META', filename, mime, totalChunks });
+
+        // 2. Enviar chunks
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * CHUNK_SIZE;
+          const end   = Math.min(start + CHUNK_SIZE, uint8array.length);
+          const slice = uint8array.slice(start, end);
+          // Convertir solo este chunk pequeño a array normal
+          const arr = [];
+          for (let k = 0; k < slice.length; k++) arr.push(slice[k]);
+          await chrome.tabs.sendMessage(dlTabId, { type: 'DOWNLOAD_CHUNK', index: i, data: arr });
+          const pct = 74 + Math.round(((i + 1) / totalChunks) * 20);
+          sendProgress('Parte ' + (i + 1) + '/' + totalChunks, pct, tabId, videoId, title);
+        }
+
+        // 3. Finalizar
+        sendProgress('Disparando descarga…', 95, tabId, videoId, title);
+        await chrome.tabs.sendMessage(dlTabId, { type: 'DOWNLOAD_FINALIZE' });
+
+        // 4. Esperar confirmacion
+        const t2 = setTimeout(() => {
+          chrome.runtime.onMessage.removeListener(onDone);
+          cleanup();
+          reject(new Error('Timeout confirmacion descarga (30s).'));
+        }, 30000);
+
+        function onDone(m2, s2) {
+          if (s2.tab?.id !== dlTabId) return;
+          if (m2?.type === 'DOWNLOAD_STARTED' || m2?.type === 'DOWNLOAD_ERROR') {
+            clearTimeout(t2);
+            chrome.runtime.onMessage.removeListener(onDone);
+            cleanup();
+            if (m2.type === 'DOWNLOAD_STARTED') resolve();
+            else reject(new Error(m2.error || 'Error en descargador.'));
+          }
+        }
+        chrome.runtime.onMessage.addListener(onDone);
+
+      } catch(e) {
+        cleanup();
+        reject(new Error('Error enviando chunks: ' + e.message));
       }
     }
     chrome.runtime.onMessage.addListener(onReady);
@@ -182,9 +218,8 @@ async function triggerBlobDownload(uint8array, filename, mime, tabId, videoId, t
 async function convertHls(hlsUrl, title, referer, tabId, videoId) {
   sendProgress('Resolviendo manifiesto…', 2, tabId, videoId, title);
   const manifest = await resolveM3u8(hlsUrl, referer, tabId, videoId, title);
-  const tsData = await downloadSegments(manifest.url, manifest.text, referer, tabId, videoId, title);
-  const sizeMB = Math.round(tsData.length / 1024 / 1024);
-  sendProgress('Disparando descarga…', 80, tabId, videoId, title);
+  const tsData   = await downloadSegments(manifest.url, manifest.text, referer, tabId, videoId, title);
+  const sizeMB   = Math.round(tsData.length / 1024 / 1024);
   await triggerBlobDownload(tsData, title + '.ts', 'video/mp2t', tabId, videoId, title);
   sendProgress('\u2705 Descarga iniciada (' + sizeMB + ' MB)', 100, tabId, videoId, title);
   return { ok: true, size: sizeMB, filename: title + '.ts' };
@@ -230,9 +265,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const cfg = result.config;
       const candidates = parseCandidates(cfg);
       const direct = pickBestDirect(candidates);
-      const hls = pickBestHls(candidates);
+      const hls    = pickBestHls(candidates);
       const videoTitle = cfg?.video?.title || ('video-' + payload.vimeoId);
-      const title = safeFilename(payload.preferredName || videoTitle);
+      const title      = safeFilename(payload.preferredName || videoTitle);
       if (type === 'DIAGNOSE_VIDEO') {
         return sendResponse({ ok: true, message: '\u2705 "' + videoTitle + '" | MP4: ' + (direct ? direct.source + ' ' + direct.quality : 'NO') + ' | HLS: ' + (hls ? 'S\u00cd' : 'NO') + ' | Candidatos: ' + candidates.length });
       }

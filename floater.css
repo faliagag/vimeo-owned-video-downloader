@@ -1,98 +1,100 @@
-/* floater.css v8.0 */
-#__vimeo_floater_container__ {
+/* floater.css v8.3 - todos los estilos del floater aqui, sin inline styles */
+#__vdf_wrap__ {
   position: fixed;
-  bottom: 24px;
-  right: 24px;
+  bottom: 20px;
+  right: 20px;
   z-index: 2147483647;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  max-width: 340px;
+  width: 340px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   pointer-events: none;
-  font-family: system-ui, -apple-system, sans-serif;
 }
-.__vdf_card {
-  pointer-events: all;
-  background: #0f172a;
-  border: 1px solid #334155;
+
+.vdf-card {
+  background: rgba(15,18,28,0.97);
+  border: 1px solid rgba(255,255,255,0.1);
   border-radius: 12px;
-  padding: 12px 14px 10px;
-  width: 320px;
+  padding: 14px 16px;
+  pointer-events: all;
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-  animation: __vdf_slidein 0.25s cubic-bezier(0.16,1,0.3,1);
-  transition: opacity 0.4s ease, transform 0.4s ease;
+  transition: opacity 0.4s ease;
 }
-.__vdf_fadeout {
-  opacity: 0 !important;
-  transform: translateX(40px);
+
+.vdf-card.vdf-fadeout {
+  opacity: 0;
 }
-.__vdf_done {
-  border-color: #166534;
-}
-.__vdf_error {
-  border-color: #7f1d1d;
-}
-@keyframes __vdf_slidein {
-  from { opacity:0; transform: translateX(40px); }
-  to   { opacity:1; transform: translateX(0); }
-}
-.__vdf_header {
+
+.vdf-header {
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin-bottom: 8px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
-.__vdf_icon {
-  font-size: 12px;
-  color: #60a5fa;
+
+.vdf-icon {
+  color: #4fc3f7;
+  font-size: 14px;
   flex-shrink: 0;
 }
-.__vdf_title {
-  font-size: 12px;
+
+.vdf-title {
+  color: #fff;
+  font-size: 13px;
   font-weight: 600;
-  color: #f1f5f9;
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.__vdf_close {
+
+.vdf-close {
   background: none;
   border: none;
-  color: #475569;
+  color: rgba(255,255,255,0.4);
   cursor: pointer;
-  font-size: 13px;
-  padding: 0;
+  font-size: 16px;
   line-height: 1;
-  transition: color 0.15s;
+  padding: 0 0 0 8px;
   flex-shrink: 0;
 }
-.__vdf_close:hover { color: #94a3b8; }
-.__vdf_bar_wrap {
-  background: #1e293b;
-  border-radius: 99px;
+.vdf-close:hover { color: rgba(255,255,255,0.8); }
+
+.vdf-bar-wrap {
+  background: rgba(255,255,255,0.08);
+  border-radius: 6px;
   height: 5px;
   overflow: hidden;
-  margin-bottom: 7px;
+  margin-bottom: 8px;
 }
-.__vdf_bar {
-  height: 5px;
-  background: linear-gradient(90deg, #2563eb, #06b6d4);
-  border-radius: 99px;
+
+.vdf-bar {
+  height: 100%;
   width: 0%;
+  background: linear-gradient(90deg, #1976d2, #4fc3f7);
+  border-radius: 6px;
   transition: width 0.4s ease;
 }
-.__vdf_done .__vdf_bar {
-  background: #22c55e;
+
+.vdf-card.vdf-done .vdf-bar {
+  background: linear-gradient(90deg, #2e7d32, #66bb6a);
 }
-.__vdf_error .__vdf_bar {
-  background: #ef4444;
+
+.vdf-card.vdf-error .vdf-bar {
+  background: #c62828;
 }
-.__vdf_status {
-  font-size: 10px;
-  color: #64748b;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+
+.vdf-status {
+  color: rgba(255,255,255,0.55);
+  font-size: 11px;
 }
-.__vdf_done .__vdf_status { color: #4ade80; }
-.__vdf_error .__vdf_status { color: #f87171; }
+
+.vdf-card.vdf-done .vdf-status {
+  color: #66bb6a;
+}
+
+.vdf-card.vdf-error .vdf-status {
+  color: #ef9a9a;
+}
