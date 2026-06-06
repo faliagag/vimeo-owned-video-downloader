@@ -1,8 +1,7 @@
-/* popup.js v8.3
- * - Botón descarga con estados: loading/ok/err (evita doble-click)
- * - Floater inyectado antes de cada descarga
- * - Log persistente en sesión
- * - Sin estilos inline
+/* popup.js v8.5
+ * - Retry automático al escanear (3 intentos con delay)
+ * - Log de todos los iframes encontrados para diagnóstico
+ * - Botón Reescanear siempre visible
  */
 'use strict';
 
@@ -64,21 +63,52 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 });
 
-async function scanEmbeds() {
-  videosEl.innerHTML = '';
-  setStatus('Escaneando…');
-  log('🔍 Escaneando iframes Vimeo…');
+// Diagnóstico de iframes en la página
+async function debugIframes() {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'DEBUG_IFRAMES' });
+    if (res?.iframes?.length) {
+      log('🔍 Iframes en página (' + res.iframes.length + '):');
+      res.iframes.forEach((f, i) => log('  [' + i + '] ' + (f.src || f.dataSrc || 'sin-src') + ' | ' + (f.className || '')));
+    } else {
+      log('⚠ No hay ningún iframe en la página.');
+    }
+  } catch(e) { log('⚠ Debug: ' + e.message); }
+}
+
+async function scanEmbeds(retry) {
+  retry = retry || 0;
+  if (retry === 0) videosEl.innerHTML = '';
+  setStatus(retry > 0 ? 'Reintentando (' + retry + '/3)…' : 'Escaneando…');
+  log('🔍 Escaneando iframes Vimeo' + (retry > 0 ? ' (intento ' + (retry + 1) + ')' : '') + '…');
+
   try {
     const res = await chrome.runtime.sendMessage({ type: 'GET_EMBEDS' });
-    if (!res?.ok) { setStatus(res?.message || 'Error.', '#fca5a5'); log('❌ ' + (res?.message || 'Sin respuesta.')); return; }
-    const embeds = res.embeds || [];
-    if (!embeds.length) {
-      setStatus('Sin iframes Vimeo detectados.', '#94a3b8');
-      log('ℹ Sin iframes Vimeo en la página actual.');
+    if (!res?.ok) {
+      setStatus(res?.message || 'Error.', '#fca5a5');
+      log('❌ ' + (res?.message || 'Sin respuesta.'));
       return;
     }
+
+    const embeds = res.embeds || [];
+
+    if (!embeds.length) {
+      if (retry < 3) {
+        // Reintentar con delay creciente
+        const delay = (retry + 1) * 800;
+        setStatus('Sin resultados, reintentando en ' + (delay / 1000).toFixed(1) + 's…', '#f59e0b');
+        setTimeout(() => scanEmbeds(retry + 1), delay);
+        return;
+      }
+      setStatus('Sin iframes Vimeo detectados.', '#94a3b8');
+      log('ℹ Sin iframes Vimeo. Ejecutando diagnóstico…');
+      await debugIframes();
+      return;
+    }
+
     setStatus(embeds.length + ' video(s) detectado(s).', '#86efac');
     log('✅ ' + embeds.length + ' video(s) encontrado(s).');
+    videosEl.innerHTML = '';
     embeds.forEach(e => renderCard(e, res.tabId, res.pageUrl));
   } catch (err) {
     setStatus('Error: ' + err.message, '#fca5a5');
@@ -109,9 +139,11 @@ function renderCard(embed, tabId, pageUrl) {
   if (embed.hasHls) {
     const t = document.createElement('span'); t.className = 'tag blue'; t.textContent = 'HLS'; tags.appendChild(t);
   }
+  if (!embed.configFound) {
+    const t = document.createElement('span'); t.className = 'tag'; t.textContent = 'sin config aún'; tags.appendChild(t);
+  }
   card.appendChild(tags);
 
-  // Campo nombre personalizado
   const field = document.createElement('div');
   field.className = 'field';
   const lbl = document.createElement('label');
@@ -127,7 +159,6 @@ function renderCard(embed, tabId, pageUrl) {
   const actions = document.createElement('div');
   actions.className = 'actions';
 
-  // Botón principal descargar
   const btnDl = document.createElement('button');
   btnDl.textContent = '⬇ Descargar';
   btnDl.setAttribute('data-vid', String(vid));
@@ -136,9 +167,7 @@ function renderCard(embed, tabId, pageUrl) {
     btnState(btnDl, 'loading', '⏳ Descargando…');
     log('⬇ Iniciando descarga ID ' + vid + '…');
     try {
-      // Inyectar floater antes
       await chrome.runtime.sendMessage({ type: 'INJECT_FLOATER' });
-      // Notificar floater
       await chrome.tabs.sendMessage(tabId, {
         type: 'FLOATER_START',
         videoId: String(vid),
@@ -172,7 +201,6 @@ function renderCard(embed, tabId, pageUrl) {
   });
   actions.appendChild(btnDl);
 
-  // Botón diagnóstico
   const btnDiag = document.createElement('button');
   btnDiag.className = 'sec';
   btnDiag.textContent = '🔍 Diagnóstico';
@@ -189,7 +217,6 @@ function renderCard(embed, tabId, pageUrl) {
   });
   actions.appendChild(btnDiag);
 
-  // Botón config raw
   const btnCfg = document.createElement('button');
   btnCfg.className = 'purple sm';
   btnCfg.textContent = '⚙ Config';
@@ -199,7 +226,7 @@ function renderCard(embed, tabId, pageUrl) {
       if (res?.ok) {
         log('Config keys: ' + (res.filesKeys || []).join(', '));
         log('Candidatos: ' + res.candidates.length + ' | Título: ' + (res.videoTitle || '?'));
-        res.candidates.forEach((c, i) => log('  [' + i + '] ' + c.source + ' ' + c.quality + ' ' + Math.round((c.size||0)/1024/1024) + 'MB'));
+        res.candidates.forEach((c, i) => log('  [' + i + '] ' + c.source + ' ' + c.quality + ' ' + Math.round((c.size || 0) / 1024 / 1024) + 'MB'));
       } else { log('❌ ' + (res?.message || 'Sin config.')); }
     } catch(e) { log('❌ ' + e.message); }
   });
@@ -209,5 +236,4 @@ function renderCard(embed, tabId, pageUrl) {
   videosEl.appendChild(card);
 }
 
-// Escanear al abrir popup
 document.addEventListener('DOMContentLoaded', () => scanEmbeds());

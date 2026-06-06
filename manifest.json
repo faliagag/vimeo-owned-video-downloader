@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Vimeo Owned Video Downloader",
-  "version": "8.4.0",
+  "version": "8.5.0",
   "description": "Descarga videos propios desde Vimeo. Sin duplicados, sin errores CSP ni RangeError.",
   "permissions": ["activeTab", "scripting", "downloads", "storage", "tabs"],
   "host_permissions": ["<all_urls>"],
