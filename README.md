@@ -1,53 +1,48 @@
-# Vimeo Owned Video Downloader
+# Vimeo Owned Video Downloader v8.3
 
-Extensión Chrome (Manifest V3) local para detectar y descargar videos propios o autorizados embebidos desde Vimeo en tu sitio.
+Extensión Chrome MV3 para descargar videos **propios** alojados en Vimeo e integrados como iframes en tu sitio web.
 
 ## Características
 
-- Detecta iframes, links, atributos `data-*` y JSON-LD con videos de Vimeo.
-- Selector de calidad (240p hasta 2160p o "la mejor disponible").
-- Nombre de archivo editable antes de descargar.
-- Diagnóstico por video: informa si hay archivos directos o solo streaming HLS/DASH.
-- Registro local de actividad (`chrome.storage.local`).
-- Restricción por dominio permitido para uso seguro.
-- Sin token ni API requeridos.
+- ✅ Detecta iframes `player.vimeo.com` automáticamente
+- ✅ Descarga MP4 directa cuando el player expone archivos progresivos
+- ✅ Conversión HLS → `.ts` para videos con solo stream adaptativo
+- ✅ Barra flotante persistente con progreso (se puede cerrar el popup)
+- ✅ Sin duplicados de tarjetas ni de descargas
+- ✅ Sin violaciones CSP (`unsafe-inline`) — todos los estilos en archivos externos
+- ✅ Sin `RangeError` — buffer enviado en chunks de 4 MB
+- ✅ Restringido al dominio que configures
 
 ## Instalación
 
-1. Clona o descarga este repositorio.
-2. Abre Chrome en `chrome://extensions/`.
-3. Activa **Developer mode**.
-4. Haz clic en **Load unpacked**.
-5. Selecciona la carpeta del repositorio.
+1. Descarga o clona el repositorio
+2. Abre `chrome://extensions/`
+3. Activa **Modo desarrollador** (esquina superior derecha)
+4. Haz clic en **Cargar sin empaquetar** y selecciona la carpeta
 
 ## Uso
 
-1. Entra a una página de tu sitio con videos Vimeo embebidos.
-2. Haz clic en el ícono de la extensión.
-3. Escribe tu dominio permitido y pulsa **Guardar**.
-4. Usa **Reescanear** si el contenido cargó de forma dinámica.
-5. En cada video puedes editar el nombre, elegir calidad y pulsar **Descargar** o **Diagnóstico**.
+1. Abre una página de tu sitio que contenga iframes de Vimeo
+2. Haz clic en el ícono de la extensión
+3. En **Dominio permitido**, ingresa tu dominio (ej: `www.tudominio.com`) y guarda
+4. La extensión escanea automáticamente los iframes
+5. Haz clic en **⬇ Descargar** en el video deseado
+6. Puedes cerrar el popup — la descarga continúa
 
-## Estructura
+## Archivos
 
-| Archivo | Descripción |
+| Archivo | Función |
 |---|---|
-| `manifest.json` | Configuración MV3 de la extensión |
-| `popup.html` | Interfaz del popup |
-| `popup.js` | Lógica del popup |
-| `content.js` | Script de detección en páginas |
-| `background.js` | Service worker: descarga y diagnóstico |
-| `INSTRUCCIONES.txt` | Guía rápida de uso |
+| `manifest.json` | Configuración MV3 |
+| `background.js` | Service worker: lógica principal, HLS download |
+| `popup.html/css/js` | Interfaz del popup |
+| `floater.js/css` | Barra flotante en la página |
+| `downloader.html/js` | Tab auxiliar para disparar Blob downloads |
+| `page_scanner.js` | Detecta iframes y accede al playerConfig |
+| `vimeo_interceptor.js` | Intercepta playerConfig dentro del iframe Vimeo |
 
-## Limitaciones
+## Notas
 
-Esta herramienta funciona solo cuando Vimeo expone archivos directos (`progressive` o `download`) desde el reproductor embebido.  
-Si el video entrega únicamente streaming HLS/DASH, la extensión lo informará pero no podrá convertirlo en descarga directa sin la API oficial de Vimeo.
-
-## Uso autorizado
-
-Diseñada exclusivamente para videos propios o con autorización expresa del titular.
-
----
-
-**Versión:** 4.0.0 · Manifest V3 · Sin código remoto
+- Solo funciona con videos a los que tienes acceso como propietario o con permisos de descarga habilitados en Vimeo
+- Videos con DRM no son descargables por este método
+- El archivo `.ts` generado de HLS es compatible con VLC y ffmpeg

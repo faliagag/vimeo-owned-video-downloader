@@ -1,220 +1,213 @@
-/* popup.js v8.2
- * - Boton Descargar se bloquea mientras descarga (evita doble-click = tarjetas duplicadas)
- * - Estado visual: loading / ok / err
+/* popup.js v8.3
+ * - Botón descarga con estados: loading/ok/err (evita doble-click)
+ * - Floater inyectado antes de cada descarga
+ * - Log persistente en sesión
+ * - Sin estilos inline
  */
 'use strict';
-const statusEl    = document.getElementById('status');
-const videosEl    = document.getElementById('videos');
-const hostInput   = document.getElementById('allowedHost');
-const hostInfo    = document.getElementById('hostInfo');
-const saveHostBtn = document.getElementById('saveHost');
-const refreshBtn  = document.getElementById('refresh');
-const clearLogBtn = document.getElementById('clearLog');
-const logEl       = document.getElementById('log');
 
-let _tabId = null, _pageUrl = null;
+const $ = id => document.getElementById(id);
+const statusEl = $('status');
+const videosEl = $('videos');
+const logEl    = $('log');
 
-function normalizeHost(v) {
-  return (v || '').trim().replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
-}
-async function appendLog(line) {
-  const { activityLog } = await chrome.storage.local.get(['activityLog']);
-  const next = [`[${new Date().toLocaleTimeString()}] ${line}`, ...(activityLog || [])].slice(0, 200);
-  await chrome.storage.local.set({ activityLog: next });
-  renderLog(next);
-}
-function renderLog(list) {
-  logEl.textContent = list?.length ? list.join('\n') : 'Sin actividad.';
-}
-async function loadLog() {
-  const { activityLog } = await chrome.storage.local.get(['activityLog']);
-  renderLog(activityLog || []);
-}
-function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function escAttr(s) { return (s||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+let sessionLog = [];
 
-function setBtnState(btn, state, text) {
-  btn.dataset.state = state;
-  if (state === 'loading') btn.textContent = '\u23f3 Descargando\u2026';
-  else if (state === 'ok')   btn.textContent = '\u2705 Iniciada';
-  else if (state === 'err')  btn.textContent = '\u274c Error';
-  else { btn.textContent = text || '\u2b07 Descargar'; delete btn.dataset.state; }
+function log(msg) {
+  const t = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  sessionLog.push('[' + t + '] ' + msg);
+  if (sessionLog.length > 120) sessionLog.shift();
+  logEl.textContent = sessionLog.join('\n');
+  logEl.scrollTop = logEl.scrollHeight;
 }
 
-function buildCard(video, idx) {
+function setStatus(msg, color) {
+  statusEl.textContent = msg;
+  statusEl.style.color = color || '#94a3b8';
+}
+
+function btnState(btn, state, label) {
+  btn.setAttribute('data-state', state || '');
+  if (label) btn.textContent = label;
+}
+
+// Cargar dominio guardado
+chrome.storage.local.get(['allowedHost'], ({ allowedHost }) => {
+  if (allowedHost) {
+    $('allowedHost').value = allowedHost;
+    $('hostInfo').textContent = 'Dominio: ' + allowedHost;
+  }
+});
+
+$('saveHost').addEventListener('click', () => {
+  const val = $('allowedHost').value.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
+  if (!val) { log('⚠ Ingresa un dominio válido.'); return; }
+  chrome.storage.local.set({ allowedHost: val }, () => {
+    $('hostInfo').textContent = 'Dominio: ' + val;
+    log('✅ Dominio guardado: ' + val);
+  });
+});
+
+$('clearLog').addEventListener('click', () => {
+  sessionLog = [];
+  logEl.textContent = 'Sin actividad.';
+});
+
+$('refresh').addEventListener('click', () => scanEmbeds());
+
+// Escuchar progreso desde background
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type === 'CONVERT_PROGRESS') {
+    const pct = msg.pct >= 0 ? ' [' + msg.pct + '%]' : '';
+    log(pct + ' ' + (msg.message || ''));
+    setStatus((msg.message || '') + pct, msg.pct >= 100 ? '#86efac' : msg.pct < 0 ? '#fca5a5' : '#93c5fd');
+  }
+});
+
+async function scanEmbeds() {
+  videosEl.innerHTML = '';
+  setStatus('Escaneando…');
+  log('🔍 Escaneando iframes Vimeo…');
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'GET_EMBEDS' });
+    if (!res?.ok) { setStatus(res?.message || 'Error.', '#fca5a5'); log('❌ ' + (res?.message || 'Sin respuesta.')); return; }
+    const embeds = res.embeds || [];
+    if (!embeds.length) {
+      setStatus('Sin iframes Vimeo detectados.', '#94a3b8');
+      log('ℹ Sin iframes Vimeo en la página actual.');
+      return;
+    }
+    setStatus(embeds.length + ' video(s) detectado(s).', '#86efac');
+    log('✅ ' + embeds.length + ' video(s) encontrado(s).');
+    embeds.forEach(e => renderCard(e, res.tabId, res.pageUrl));
+  } catch (err) {
+    setStatus('Error: ' + err.message, '#fca5a5');
+    log('❌ ' + err.message);
+  }
+}
+
+function renderCard(embed, tabId, pageUrl) {
   const card = document.createElement('div');
   card.className = 'card';
-  card.innerHTML = [
-    '<div class="title">' + (idx + 1) + '. ' + escHtml(video.titleHint || 'Embed Vimeo') + ' &middot; ID ' + escHtml(video.vimeoId || '?') + '</div>',
-    '<div class="meta">' + escHtml((video.src || '').slice(0, 90)) + '</div>',
-    '<div class="tags">',
-      '<span class="tag">' + escHtml(video.detectedBy || '') + '</span>',
-      '<span class="tag blue">ID: ' + escHtml(video.vimeoId || '?') + '</span>',
-    '</div>',
-    '<div class="field"><label>Nombre del archivo</label>',
-      '<input type="text" value="' + escAttr(video.titleHint || 'video-' + video.vimeoId) + '">',
-    '</div>',
-    '<div class="actions"></div>'
-  ].join('');
+  const vid = embed.vimeoId || embed.id || '?';
 
-  const filenameInput = card.querySelector('input');
-  const actions = card.querySelector('.actions');
+  const titleEl = document.createElement('div');
+  titleEl.className = 'title';
+  titleEl.textContent = embed.title || ('Video ' + vid);
+  card.appendChild(titleEl);
 
-  // --- Boton Descargar ---
+  const metaEl = document.createElement('div');
+  metaEl.className = 'meta';
+  metaEl.textContent = 'ID: ' + vid + (embed.src ? ' · ' + embed.src.slice(0, 60) + '…' : '');
+  card.appendChild(metaEl);
+
+  const tags = document.createElement('div');
+  tags.className = 'tags';
+  if (embed.hasProgressiveFiles) {
+    const t = document.createElement('span'); t.className = 'tag blue'; t.textContent = 'MP4 directo'; tags.appendChild(t);
+  }
+  if (embed.hasHls) {
+    const t = document.createElement('span'); t.className = 'tag blue'; t.textContent = 'HLS'; tags.appendChild(t);
+  }
+  card.appendChild(tags);
+
+  // Campo nombre personalizado
+  const field = document.createElement('div');
+  field.className = 'field';
+  const lbl = document.createElement('label');
+  lbl.textContent = 'Nombre de archivo:';
+  field.appendChild(lbl);
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.value = embed.title || ('vimeo-' + vid);
+  nameInput.placeholder = 'nombre-sin-extension';
+  field.appendChild(nameInput);
+  card.appendChild(field);
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  // Botón principal descargar
   const btnDl = document.createElement('button');
-  btnDl.textContent = '\u2b07 Descargar';
-  btnDl.onclick = async () => {
-    if (btnDl.dataset.state === 'loading') return; // bloqueo anti-doble-click
-    setBtnState(btnDl, 'loading');
-    statusEl.textContent = 'Iniciando\u2026';
-
-    // Inyectar floater (singleton por DOM id, no duplica)
-    await chrome.runtime.sendMessage({ type: 'INJECT_FLOATER' });
-
-    // Avisar al floater que empiece UNA tarjeta para este video
-    if (_tabId) {
-      chrome.tabs.sendMessage(_tabId, {
+  btnDl.textContent = '⬇ Descargar';
+  btnDl.setAttribute('data-vid', String(vid));
+  btnDl.addEventListener('click', async () => {
+    if (btnDl.getAttribute('data-state') === 'loading') return;
+    btnState(btnDl, 'loading', '⏳ Descargando…');
+    log('⬇ Iniciando descarga ID ' + vid + '…');
+    try {
+      // Inyectar floater antes
+      await chrome.runtime.sendMessage({ type: 'INJECT_FLOATER' });
+      // Notificar floater
+      await chrome.tabs.sendMessage(tabId, {
         type: 'FLOATER_START',
-        videoId: video.vimeoId,
-        title: filenameInput.value
+        videoId: String(vid),
+        title: nameInput.value || embed.title || ('Video ' + vid)
       }).catch(() => {});
-    }
 
-    const payload = {
-      ...video,
-      tabId: _tabId,
-      pageUrl: _pageUrl,
-      preferredName: filenameInput.value
-    };
-
-    const r = await chrome.runtime.sendMessage({ type: 'TRY_DOWNLOAD', payload });
-    statusEl.textContent = r.message || '\u2026';
-    appendLog((r.ok ? 'OK' : 'ERR') + ' \u00b7 ' + filenameInput.value + ' \u00b7 ' + r.message);
-
-    if (r.converting && r.hlsUrl) {
-      statusEl.textContent = '\u23f3 Descargando en segundo plano. Puedes cerrar este popup.';
-      // Lanzar conversion HLS en background (no bloquea popup)
-      chrome.runtime.sendMessage({
-        type: 'CONVERT_HLS',
-        payload: {
-          hlsUrl: r.hlsUrl,
-          title: r.title || filenameInput.value,
-          referer: _pageUrl,
-          tabId: _tabId,
-          videoId: video.vimeoId
-        }
-      }).then(cr => {
-        const ok = cr?.ok;
-        setBtnState(btnDl, ok ? 'ok' : 'err');
-        if (_tabId) {
-          chrome.tabs.sendMessage(_tabId, {
-            type: ok ? 'FLOATER_DONE' : 'FLOATER_ERROR',
-            videoId: video.vimeoId,
-            title: filenameInput.value,
-            message: cr?.message
-          }).catch(() => {});
-        }
-        appendLog((ok ? 'HLS OK' : 'HLS ERR') + ' \u00b7 ' + filenameInput.value + ' \u00b7 ' + cr?.message);
-      }).catch(e => {
-        setBtnState(btnDl, 'err');
-        appendLog('HLS ERR \u00b7 ' + e.message);
+      const res = await chrome.runtime.sendMessage({
+        type: 'TRY_DOWNLOAD',
+        payload: { vimeoId: String(vid), tabId, pageUrl, preferredName: nameInput.value || embed.title }
       });
-    } else if (r.ok) {
-      setBtnState(btnDl, 'ok');
-      if (_tabId) {
-        chrome.tabs.sendMessage(_tabId, {
-          type: 'FLOATER_DONE',
-          videoId: video.vimeoId,
-          title: filenameInput.value,
-          message: r.message
-        }).catch(() => {});
-      }
-    } else {
-      setBtnState(btnDl, 'err');
-      if (_tabId) {
-        chrome.tabs.sendMessage(_tabId, {
-          type: 'FLOATER_ERROR',
-          videoId: video.vimeoId,
-          title: filenameInput.value,
-          message: r.message
-        }).catch(() => {});
-      }
-    }
-  };
 
-  // --- Boton Diagnostico ---
+      if (res?.converting) {
+        log('⏳ Iniciando conversión HLS: ' + res.title);
+        const r2 = await chrome.runtime.sendMessage({
+          type: 'CONVERT_HLS',
+          payload: { hlsUrl: res.hlsUrl, title: res.title, referer: pageUrl, tabId, videoId: String(vid) }
+        });
+        if (r2?.ok) { btnState(btnDl, 'ok', '✅ Listo'); log('✅ ' + (r2.message || 'Descarga completada.')); }
+        else { btnState(btnDl, 'err', '❌ Error'); log('❌ ' + (r2?.message || 'Error HLS.')); }
+      } else if (res?.ok) {
+        btnState(btnDl, 'ok', '✅ Listo');
+        log('✅ ' + (res.message || 'Descarga iniciada.'));
+      } else {
+        btnState(btnDl, 'err', '❌ Error');
+        log('❌ ' + (res?.message || 'Sin respuesta del background.'));
+      }
+    } catch (err) {
+      btnState(btnDl, 'err', '❌ Error');
+      log('❌ Excepción: ' + err.message);
+    }
+  });
+  actions.appendChild(btnDl);
+
+  // Botón diagnóstico
   const btnDiag = document.createElement('button');
   btnDiag.className = 'sec';
-  btnDiag.textContent = '\ud83d\udd0d Diagn\u00f3stico';
-  btnDiag.onclick = async () => {
-    statusEl.textContent = 'Diagnosticando\u2026';
-    const r = await chrome.runtime.sendMessage({
-      type: 'DIAGNOSE_VIDEO',
-      payload: { ...video, tabId: _tabId, pageUrl: _pageUrl }
-    });
-    statusEl.textContent = r.message || '\u2026';
-    appendLog('DIAG \u00b7 ' + (video.vimeoId || '?') + ' \u00b7 ' + r.message);
-  };
+  btnDiag.textContent = '🔍 Diagnóstico';
+  btnDiag.addEventListener('click', async () => {
+    btnDiag.textContent = '…';
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: 'DIAGNOSE_VIDEO',
+        payload: { vimeoId: String(vid), tabId, pageUrl }
+      });
+      log(res?.message || JSON.stringify(res));
+    } catch(e) { log('❌ ' + e.message); }
+    btnDiag.textContent = '🔍 Diagnóstico';
+  });
+  actions.appendChild(btnDiag);
 
-  // --- Boton Config Raw ---
-  const btnRaw = document.createElement('button');
-  btnRaw.className = 'purple';
-  btnRaw.textContent = '\ud83d\udd2c Config';
-  btnRaw.onclick = async () => {
-    const r = await chrome.runtime.sendMessage({
-      type: 'GET_RAW_CONFIG',
-      payload: { ...video, tabId: _tabId, pageUrl: _pageUrl }
-    });
-    if (!r.ok) { statusEl.textContent = r.message; return; }
-    const info = '[' + r.filesKeys.join(',') + '] ' + r.candidates.map(c => c.source + ':' + c.quality).join(' | ');
-    statusEl.textContent = info;
-    appendLog('RAW \u00b7 ' + (r.videoTitle || video.vimeoId) + ' \u00b7 ' + info);
-  };
+  // Botón config raw
+  const btnCfg = document.createElement('button');
+  btnCfg.className = 'purple sm';
+  btnCfg.textContent = '⚙ Config';
+  btnCfg.addEventListener('click', async () => {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'GET_RAW_CONFIG', payload: { tabId, vimeoId: String(vid) } });
+      if (res?.ok) {
+        log('Config keys: ' + (res.filesKeys || []).join(', '));
+        log('Candidatos: ' + res.candidates.length + ' | Título: ' + (res.videoTitle || '?'));
+        res.candidates.forEach((c, i) => log('  [' + i + '] ' + c.source + ' ' + c.quality + ' ' + Math.round((c.size||0)/1024/1024) + 'MB'));
+      } else { log('❌ ' + (res?.message || 'Sin config.')); }
+    } catch(e) { log('❌ ' + e.message); }
+  });
+  actions.appendChild(btnCfg);
 
-  actions.append(btnDl, btnDiag, btnRaw);
-  return card;
+  card.appendChild(actions);
+  videosEl.appendChild(card);
 }
 
-function render(embeds) {
-  videosEl.innerHTML = '';
-  if (!embeds?.length) {
-    statusEl.textContent = '\u26a0\ufe0f Sin embeds detectados. Recarga la p\u00e1gina con la extensi\u00f3n activa.';
-    return;
-  }
-  statusEl.textContent = '\u2705 ' + embeds.length + ' embed(s) detectado(s).';
-  embeds.forEach((v, i) => videosEl.appendChild(buildCard(v, i)));
-}
-
-async function loadHost() {
-  const { allowedHost } = await chrome.storage.local.get(['allowedHost']);
-  hostInput.value = allowedHost || '';
-  hostInfo.textContent = 'Dominio: ' + (allowedHost || 'sin configurar');
-}
-
-saveHostBtn.addEventListener('click', async () => {
-  const h = normalizeHost(hostInput.value);
-  await chrome.storage.local.set({ allowedHost: h });
-  hostInfo.textContent = 'Dominio: ' + (h || 'sin configurar');
-  statusEl.textContent = '\u2705 Dominio guardado.';
-  appendLog('CONFIG \u00b7 dominio = ' + h);
-});
-
-refreshBtn.addEventListener('click', init);
-
-clearLogBtn.addEventListener('click', async () => {
-  await chrome.storage.local.set({ activityLog: [] });
-  renderLog([]);
-});
-
-async function init() {
-  await loadHost();
-  await loadLog();
-  statusEl.textContent = 'Escaneando\u2026';
-  const r = await chrome.runtime.sendMessage({ type: 'GET_EMBEDS' });
-  if (!r?.ok) { statusEl.textContent = '\u274c ' + (r?.message || 'Error.'); return; }
-  _tabId = r.tabId;
-  _pageUrl = r.pageUrl;
-  render(r.embeds);
-}
-
-init();
+// Escanear al abrir popup
+document.addEventListener('DOMContentLoaded', () => scanEmbeds());

@@ -1,26 +1,33 @@
-INSTALACIÓN RÁPIDA
+Vimeo Owned Video Downloader v8.3
+==================================
 
-1. Clona o descarga este repositorio.
-2. Abre Chrome y entra a: chrome://extensions/
-3. Activa Developer mode.
-4. Pulsa Load unpacked.
-5. Selecciona la carpeta descargada.
+INSTALACIÓN:
+1. Descomprime / clona la carpeta del proyecto
+2. Abre Chrome y ve a: chrome://extensions/
+3. Activa "Modo desarrollador" (interruptor arriba a la derecha)
+4. Haz clic en "Cargar sin empaquetar"
+5. Selecciona la carpeta que contiene el manifest.json
 
-USO
+PRIMER USO:
+1. Abre tu sitio web que tiene los iframes de Vimeo
+2. Haz clic en el icono de la extensión (puzzle > Vimeo Owned Downloader)
+3. En el campo "Dominio permitido" escribe tu dominio (ej: www.tusitio.com)
+4. Haz clic en Guardar
+5. La extensión escaneara automaticamente los videos en la pagina
+6. Haz clic en el boton Descargar del video que quieras
+7. Puedes cerrar el popup - la descarga continua en segundo plano
 
-1. Entra a una página de tu sitio con videos Vimeo embebidos.
-2. Haz clic en la extensión.
-3. Escribe tu dominio y pulsa Guardar.
-4. Pulsa Reescanear si es necesario.
-5. En cada video puedes:
-   - cambiar el nombre del archivo,
-   - elegir la calidad,
-   - descargar,
-   - ejecutar diagnóstico.
+FORMAT DE SALIDA:
+- MP4: cuando Vimeo expone archivos progresivos (mejor calidad)
+- .TS: cuando solo hay HLS disponible (abrir con VLC o convertir con ffmpeg)
 
-NOTAS
+ACTUALIZAR LA EXTENSIÓN:
+1. Descarga el ZIP desde GitHub
+2. Elimina la extensión antigua en chrome://extensions/
+3. Carga la nueva carpeta con "Cargar sin empaquetar"
+4. Cierra y reabre la pestaña de tu sitio
 
-- Esta versión funciona sin token ni API.
-- Aprovecha solo lo que Vimeo exponga desde el embed/player.
-- Si Vimeo entrega solo HLS o DASH, la extensión lo avisará.
-- Úsala únicamente con videos propios o autorizados.
+PROBLEMAS COMUNES:
+- "Sin playerConfig": el iframe puede ser cross-origin con Vimeo private. Intenta el botón Diagnóstico.
+- Error CSP: asegurate de usar los archivos v8.3 completos (no mezclar versiones)
+- Duplicados: siempre elimina la extensión anterior antes de cargar la nueva
