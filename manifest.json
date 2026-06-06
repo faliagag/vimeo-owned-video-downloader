@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Vimeo Owned Video Downloader",
-  "version": "8.3.0",
-  "description": "Descarga videos propios desde Vimeo con barra flotante persistente. Sin duplicados. Sin errores CSP ni RangeError.",
+  "version": "8.4.0",
+  "description": "Descarga videos propios desde Vimeo. Sin duplicados, sin errores CSP ni RangeError.",
   "permissions": ["activeTab", "scripting", "downloads", "storage", "tabs"],
   "host_permissions": ["<all_urls>"],
   "content_security_policy": {
