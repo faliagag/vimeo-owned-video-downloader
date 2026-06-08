@@ -9,7 +9,7 @@
 <body>
   <div class="header">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="#1ab7ea"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
-    <span>Vimeo Downloader <small>v9.0</small></span>
+    <span>Vimeo Downloader <small>v9.5</small></span>
     <button id="refresh" title="Reescanear">↺</button>
   </div>
 
@@ -24,6 +24,24 @@
 
   <div id="status" class="status">Iniciando…</div>
   <div id="videos"></div>
+
+  <!-- BOOKMARKLET ───────────────────────────────── -->
+  <details id="bookmarklet-section">
+    <summary>🔖 Bookmarklet — extraer config manual</summary>
+    <div class="bm-body">
+      <p class="hint">Arrastra el botón a tu barra de marcadores. Úsalo en una página de Vimeo o tu sitio para copiar el playerConfig al portapapeles y luego pégalo en el log de diagnóstico.</p>
+      <div class="bm-row">
+        <!-- Enlace arrastrable -->
+        <a id="bm-drag"
+           class="bm-link"
+           title="Arrastra esto a tu barra de marcadores">
+          🔖 Copiar Config Vimeo
+        </a>
+        <button id="bm-copy" class="small">Copiar código</button>
+      </div>
+      <textarea id="bm-code" class="bm-code" readonly spellcheck="false"></textarea>
+    </div>
+  </details>
 
   <details>
     <summary>📋 Log de actividad</summary>
