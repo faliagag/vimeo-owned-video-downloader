@@ -1,8 +1,7 @@
-// popup.js — sin ES modules
 (function () {
   'use strict';
 
-  var currentTab = null;
+  var currentTabUrl = '';
 
   function normalizeDomain(v) {
     return (v || '').trim().toLowerCase()
@@ -20,13 +19,23 @@
       '<p style="word-break:break-all;font-size:12px;color:var(--muted)">' + item.sourceUrl + '</p>' +
       '<div class="actions"><button data-action="fetch" ' + (allowed ? '' : 'disabled title="Autoriza el dominio primero"') + '>Ver descargas</button></div>' +
       '<div class="downloads"></div>';
+
     el.querySelector('[data-action="fetch"]').addEventListener('click', async function () {
       var box = el.querySelector('.downloads');
       box.innerHTML = '<p class="small">Consultando Vimeo&hellip;</p>';
       try {
-        var res = await chrome.runtime.sendMessage({ type: 'GET_VIMEO_DOWNLOADS', videoId: item.videoId, pageUrl: item.sourceUrl });
+        // CLAVE: pasar currentTabUrl como pageUrl para que background pueda validar el dominio
+        var res = await chrome.runtime.sendMessage({
+          type: 'GET_VIMEO_DOWNLOADS',
+          videoId: item.videoId,
+          pageUrl: currentTabUrl
+        });
         if (!res.ok) { box.innerHTML = '<p class="small">⚠️ ' + res.error + '</p>'; return; }
         box.innerHTML = '';
+        if (!res.files || !res.files.length) {
+          box.innerHTML = '<p class="small">⚠️ Vimeo no expone MP4 descargables para este video.</p>';
+          return;
+        }
         res.files.forEach(function (file) {
           var row = document.createElement('div');
           row.className = 'row between'; row.style.marginTop = '8px';
@@ -34,12 +43,17 @@
           label.textContent = (file.quality || 'MP4') + (file.width ? ' · ' + file.width + 'x' + file.height : '');
           var btn = document.createElement('button');
           btn.textContent = 'Descargar';
-          btn.addEventListener('click', function () {
-            chrome.runtime.sendMessage({ type: 'DOWNLOAD_FILE', url: file.url, filename: file.filename });
-          });
-          row.append(label, btn); box.appendChild(row);
+          (function (f) {
+            btn.addEventListener('click', function () {
+              chrome.runtime.sendMessage({ type: 'DOWNLOAD_FILE', url: f.url, filename: f.filename });
+            });
+          })(file);
+          row.append(label, btn);
+          box.appendChild(row);
         });
-      } catch (e) { box.innerHTML = '<p class="small">⚠️ ' + e.message + '</p>'; }
+      } catch (e) {
+        box.innerHTML = '<p class="small">⚠️ ' + e.message + '</p>';
+      }
     });
     return el;
   }
@@ -56,11 +70,12 @@
     $('#addDomainBtn').style.display = 'none';
 
     var tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    currentTab = tabs[0];
-    if (!currentTab || !currentTab.id) { statusEl.textContent = 'Sin pestaña activa'; return; }
+    var tab = tabs[0];
+    if (!tab || !tab.id) { statusEl.textContent = 'Sin pestaña activa'; return; }
 
-    var url = currentTab.url || '';
-    if (/^(chrome|edge|about|chrome-extension):/.test(url)) {
+    currentTabUrl = tab.url || '';
+
+    if (/^(chrome|edge|about|chrome-extension):/.test(currentTabUrl)) {
       $('#currentDomain').textContent = '-';
       statusEl.textContent = '⛔ URL no compatible';
       $('#list').innerHTML = '<div class="item"><p>Navega a una página web normal y vuelve a abrir la extensión.</p></div>';
@@ -68,14 +83,14 @@
     }
 
     var hostname = '';
-    try { hostname = new URL(url).hostname; } catch (e) {}
+    try { hostname = new URL(currentTabUrl).hostname; } catch (e) {}
     $('#currentDomain').textContent = hostname;
 
     var res;
     try {
-      res = await chrome.tabs.sendMessage(currentTab.id, { type: 'SCAN_PAGE' });
+      res = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_PAGE' });
     } catch (e1) {
-      try { res = await injectAndScan(currentTab.id); }
+      try { res = await injectAndScan(tab.id); }
       catch (e2) {
         statusEl.textContent = 'Error';
         $('#list').innerHTML = '<div class="item"><p>⚠️ Recarga la página (F5) y vuelve a abrir la extensión.</p></div>';
@@ -85,7 +100,6 @@
 
     if (!res.allowed) {
       statusEl.textContent = '⛔ No autorizado';
-      // Mostrar botón para autorizar con un clic
       var btn = $('#addDomainBtn');
       btn.textContent = '➕ Autorizar ' + normalizeDomain(hostname);
       btn.style.display = 'block';
