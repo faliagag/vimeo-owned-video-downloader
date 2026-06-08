@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Vimeo Owned Video Downloader",
-  "version": "9.0.0",
-  "description": "Descarga tus videos Vimeo embebidos. Todas las estrategias: playerConfig, config.js, oEmbed, HLS, MP4 progresivo.",
+  "version": "9.1.0",
+  "description": "Descarga tus videos Vimeo embebidos en MP4. Todas las estrategias: playerConfig, config.js, oEmbed, HLS→MP4, MP4 progresivo.",
   "permissions": ["activeTab", "scripting", "downloads", "storage", "tabs", "webRequest"],
   "host_permissions": ["<all_urls>"],
   "content_security_policy": {
@@ -16,7 +16,7 @@
     "service_worker": "background.js"
   },
   "web_accessible_resources": [{
-    "resources": ["downloader.html", "downloader.js", "floater.js", "floater.css"],
+    "resources": ["downloader.html", "downloader.js", "mux.min.js", "floater.js", "floater.css"],
     "matches": ["<all_urls>"]
   }],
   "content_scripts": [

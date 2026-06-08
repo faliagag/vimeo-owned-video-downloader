@@ -1,4 +1,4 @@
-VIMEO OWNED VIDEO DOWNLOADER v9.0
+VIMEO OWNED VIDEO DOWNLOADER v9.1
 ==================================
 
 INSTALACIÓN
@@ -16,6 +16,7 @@ USO
 3. Escribe tu dominio (ej: misitio.cl) y haz clic en Guardar
 4. La extensión detecta automáticamente los iframes con 4 reintentos
 5. Cada video muestra un botón "⬇ Descargar"
+6. El video se descarga SIEMPRE como .mp4
 
 ESTRATEGIAS DE EXTRACCIÓN (sin API key)
 ---------------------------------------
@@ -27,11 +28,11 @@ ESTRATEGIAS DE EXTRACCIÓN (sin API key)
 6. MutationObserver para iframes dinámicos
 7. Timers diferidos (1.5s, 4s) para lazy loading
 
-FORMATOS DE DESCARGA
---------------------
-- MP4 progresivo (calidad HD cuando disponible)
-- MP4 de enlace download directo
-- HLS → .ts ensamblado localmente
+FLUJO DE DESCARGA
+-----------------
+1. MP4 progresivo directo (mejor calidad, descarga directa)
+2. HLS → descarga segmentos → mux.js remux → .mp4
+   (fallback: si mux.js falla, guarda como .mp4 de todas formas)
 
 DIAGNÓSTICO
 -----------
