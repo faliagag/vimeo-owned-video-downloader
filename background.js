@@ -1,14 +1,12 @@
-// background.js v9.9.1
+// background.js v10.0.0
 // Service Worker principal.
-// Maneja: GET_EMBEDS, TRY_DOWNLOAD, CONVERT_HLS, DIAGNOSE_VIDEO,
-//         DEBUG_IFRAMES, INJECT_FLOATER, GET_RAW_CONFIG
-// Conversion: concatenacion binaria TS pura via Offscreen (sin ffmpeg/WASM)
+// CAMBIO CLAVE v10: Ya no hace fetch directo a la API de Vimeo (causa 403).
+// En su lugar, lee la config que el content_script captura del DOM de la pagina.
 
-const VERSION = '9.9.1';
+const VERSION = '10.0.0';
 let offscreenReady = false;
 let offscreenCreating = false;
 
-// ── Log ─────────────────────────────────────────────────────────────────
 function logSW(tabId, msg) {
   const ts = new Date().toLocaleTimeString('es-CL');
   console.log('[SW]', msg);
@@ -18,7 +16,6 @@ function logSW(tabId, msg) {
   }
 }
 
-// ── Offscreen ────────────────────────────────────────────────────────────
 async function ensureOffscreen() {
   if (offscreenReady) return;
   if (offscreenCreating) {
@@ -43,12 +40,10 @@ async function ensureOffscreen() {
   }
 }
 
-// ── Helpers URL ─────────────────────────────────────────────────────────
 function resolveUrl(base, relative) {
   try { return new URL(relative, base).href; } catch { return relative; }
 }
 
-// ── Scripting helpers ────────────────────────────────────────────────────
 async function execInTab(tabId, func, args) {
   const results = await chrome.scripting.executeScript({
     target: { tabId, allFrames: false },
@@ -59,25 +54,57 @@ async function execInTab(tabId, func, args) {
   return results?.[0]?.result;
 }
 
+// ── Leer config capturada por el interceptor en la pagina ────────────────
+// El content_script inyecta codigo en world:MAIN que captura window.__vimeoConfigs__
+// cuando Vimeo llama a su propio endpoint de config. Esto evita el 403.
+async function getConfigFromPage(tabId, vimeoId) {
+  try {
+    const config = await execInTab(tabId, (vid) => {
+      // Buscar en el interceptor del content_script
+      if (window.__VIMEO_PAGE_CONFIGS__) {
+        const key = String(vid);
+        if (window.__VIMEO_PAGE_CONFIGS__[key]) {
+          return window.__VIMEO_PAGE_CONFIGS__[key];
+        }
+        // Probar cualquier config disponible si hay solo una
+        const keys = Object.keys(window.__VIMEO_PAGE_CONFIGS__);
+        if (keys.length === 1) return window.__VIMEO_PAGE_CONFIGS__[keys[0]];
+      }
+
+      // Intentar leer config del DOM de la pagina player.vimeo.com
+      try {
+        const scriptEl = document.querySelector('script#player-config');
+        if (scriptEl) return JSON.parse(scriptEl.textContent);
+      } catch (e) {}
+
+      // Intentar leer del objeto global window.Vimeo o similares
+      if (window.__player_config) return window.__player_config;
+      if (window.playerConfig) return window.playerConfig;
+
+      return null;
+    }, [String(vimeoId)]);
+    return config || null;
+  } catch (e) {
+    console.warn('[SW] getConfigFromPage error:', e.message);
+    return null;
+  }
+}
+
 // ── Scan de embeds en la tab activa ─────────────────────────────────────
 async function getEmbedsFromTab(tabId) {
   try {
-    // Primero asegurar que page_scanner.js esta activo
     await chrome.scripting.executeScript({
       target: { tabId, allFrames: false },
       files: ['page_scanner.js'],
       world: 'MAIN'
-    }).catch(() => {}); // puede fallar si ya esta inyectado
+    }).catch(() => {});
 
-    // Esperar un momento para que el scanner procese
     await new Promise(r => setTimeout(r, 400));
 
-    // Leer los embeds encontrados
     const embeds = await execInTab(tabId, () => {
       if (typeof window.__scanVimeoEmbedsNow === 'function') {
         return window.__scanVimeoEmbedsNow();
       }
-      // Fallback: escanear iframes manualmente
       const results = [];
       document.querySelectorAll('iframe').forEach(iframe => {
         const src = iframe.src || iframe.getAttribute('data-src') || '';
@@ -94,36 +121,30 @@ async function getEmbedsFromTab(tabId) {
   }
 }
 
-// ── Obtener config de Vimeo para un video ────────────────────────────────
-async function fetchVimeoConfig(vimeoId, referer, tabCookies) {
-  const configUrl = `https://player.vimeo.com/video/${vimeoId}/config`;
-  const headers = {
-    'Referer': referer || 'https://player.vimeo.com/',
-    'Origin': 'https://player.vimeo.com',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-  };
-  if (tabCookies) headers['Cookie'] = tabCookies;
-
-  const resp = await fetch(configUrl, { headers });
-  if (!resp.ok) throw new Error(`Config HTTP ${resp.status}`);
-  return resp.json();
-}
-
-// ── Descargar segmentos HLS ──────────────────────────────────────────────
-async function fetchSegment(url, headers) {
-  const resp = await fetch(url, { headers });
+// ── Descarga de segmentos HLS (con Referer correcto) ─────────────────────
+async function fetchSegment(url, pageUrl) {
+  const resp = await fetch(url, {
+    headers: {
+      'Referer': pageUrl || 'https://player.vimeo.com/',
+      'Origin': 'https://player.vimeo.com'
+    }
+  });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.arrayBuffer();
 }
 
-async function downloadHLS(tabId, masterUrl, requestHeaders, onProgress) {
+async function downloadHLS(tabId, masterUrl, pageUrl) {
   logSW(tabId, 'Obteniendo M3U8 maestro...');
-  const masterResp = await fetch(masterUrl, { headers: requestHeaders });
+  const headers = {
+    'Referer': pageUrl || 'https://player.vimeo.com/',
+    'Origin': 'https://player.vimeo.com'
+  };
+
+  const masterResp = await fetch(masterUrl, { headers });
   if (!masterResp.ok) throw new Error(`M3U8 HTTP ${masterResp.status}`);
   const masterText = await masterResp.text();
   const lines = masterText.split('\n').map(l => l.trim()).filter(Boolean);
 
-  // Elegir mejor calidad
   let playlistUrl = null;
   let bestBandwidth = -1;
   for (let i = 0; i < lines.length; i++) {
@@ -139,7 +160,7 @@ async function downloadHLS(tabId, masterUrl, requestHeaders, onProgress) {
   if (!playlistUrl) playlistUrl = masterUrl;
 
   logSW(tabId, `Playlist: ${playlistUrl}`);
-  const plResp = await fetch(playlistUrl, { headers: requestHeaders });
+  const plResp = await fetch(playlistUrl, { headers });
   if (!plResp.ok) throw new Error(`Playlist HTTP ${plResp.status}`);
   const plText = await plResp.text();
   const segLines = plText.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
@@ -158,12 +179,11 @@ async function downloadHLS(tabId, masterUrl, requestHeaders, onProgress) {
       }).catch(() => {});
     }
     const segUrl = resolveUrl(playlistUrl, segLines[i]);
-    segments.push(await fetchSegment(segUrl, requestHeaders));
+    segments.push(await fetchSegment(segUrl, pageUrl));
   }
   return segments;
 }
 
-// ── Flujo principal de descarga ──────────────────────────────────────────
 async function startHLSDownload(tabId, hlsUrl, filename, pageUrl) {
   try {
     logSW(tabId, `v${VERSION} — Iniciando descarga HLS`);
@@ -171,12 +191,7 @@ async function startHLSDownload(tabId, hlsUrl, filename, pageUrl) {
 
     await ensureOffscreen();
 
-    const headers = {
-      'Referer': pageUrl || 'https://player.vimeo.com/',
-      'Origin': 'https://player.vimeo.com'
-    };
-
-    const segments = await downloadHLS(tabId, hlsUrl, headers);
+    const segments = await downloadHLS(tabId, hlsUrl, pageUrl);
     if (tabId) chrome.tabs.sendMessage(tabId, { type: 'CONVERT_PROGRESS', pct: 85, message: 'Concatenando segmentos…' }).catch(() => {});
 
     logSW(tabId, `Enviando ${segments.length} segmentos al offscreen`);
@@ -207,37 +222,29 @@ async function startHLSDownload(tabId, hlsUrl, filename, pageUrl) {
   }
 }
 
-// ── Intentar descarga directa MP4 o HLS ─────────────────────────────────
+// ── Flujo principal de descarga ──────────────────────────────────────────
 async function tryDownload({ vimeoId, tabId, pageUrl, preferredName }) {
   logSW(tabId, `TRY_DOWNLOAD: ID ${vimeoId}`);
 
-  // 1. Intentar leer config desde la tab (capturado por interceptor)
-  let config = null;
-  try {
-    const res = await execInTab(tabId, (vid) => {
-      if (window.__VIMEO_PAGE_CONFIGS__ && window.__VIMEO_PAGE_CONFIGS__[vid]) {
-        return window.__VIMEO_PAGE_CONFIGS__[vid];
-      }
-      return null;
-    }, [String(vimeoId)]);
-    if (res) config = res;
-  } catch (e) { console.warn('[SW] No se pudo leer config de tab:', e.message); }
+  // PASO 1: Leer config del interceptor en la pagina (NO fetch a la API — evita 403)
+  let config = await getConfigFromPage(tabId, vimeoId);
 
-  // 2. Si no hay config local, fetchear desde API de Vimeo
   if (!config) {
-    logSW(tabId, 'Config no capturado aun, consultando API...');
-    try {
-      config = await fetchVimeoConfig(vimeoId, pageUrl);
-    } catch (e) {
-      logSW(tabId, `No se pudo obtener config: ${e.message}`);
-    }
+    // PASO 2: Si estamos en player.vimeo.com, esperar y reintentar
+    logSW(tabId, 'Config no disponible aun, esperando 2s y reintentando...');
+    await new Promise(r => setTimeout(r, 2000));
+    config = await getConfigFromPage(tabId, vimeoId);
   }
 
   if (!config) {
-    return { ok: false, message: 'No se pudo obtener configuracion del video. Intenta reproducir el video primero.' };
+    return {
+      ok: false,
+      message: 'No se pudo obtener la configuracion del video.\n\n' +
+               '➡️ Asegurate de que el video este reproduciendose en la pagina y vuelve a intentarlo.'
+    };
   }
 
-  // 3. Buscar MP4 progresivo primero
+  // PASO 3: Buscar MP4 progresivo (mejor opcion)
   const progressive = config?.request?.files?.progressive || config?.files?.progressive || [];
   if (progressive.length) {
     progressive.sort((a, b) => (b.height || 0) - (a.height || 0));
@@ -248,7 +255,7 @@ async function tryDownload({ vimeoId, tabId, pageUrl, preferredName }) {
     return { ok: true, message: `Descargando MP4 ${best.quality || best.height}p` };
   }
 
-  // 4. Buscar enlaces de descarga directa
+  // PASO 4: Buscar enlaces de descarga directa
   const downloads = config?.download || config?.request?.files?.download || [];
   if (downloads.length) {
     downloads.sort((a, b) => (b.height || 0) - (a.height || 0));
@@ -260,7 +267,7 @@ async function tryDownload({ vimeoId, tabId, pageUrl, preferredName }) {
     return { ok: true, message: `Descargando MP4 directo ${best.quality || best.height}p` };
   }
 
-  // 5. HLS como ultimo recurso
+  // PASO 5: HLS como ultimo recurso
   const hlsCdns = config?.request?.files?.hls?.cdns || config?.files?.hls?.cdns || {};
   const cdnEntries = Object.values(hlsCdns);
   const hlsUrl = cdnEntries[0]?.url || config?.request?.files?.hls?.url || config?.files?.hls?.url;
@@ -277,13 +284,11 @@ async function tryDownload({ vimeoId, tabId, pageUrl, preferredName }) {
 // ── Message handlers ─────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
-  // Log desde offscreen
   if (msg.type === 'OFFSCREEN_LOG') {
     console.log('[Offscreen]', msg.msg);
     return;
   }
 
-  // Obtener embeds de la tab activa
   if (msg.type === 'GET_EMBEDS') {
     (async () => {
       try {
@@ -298,7 +303,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // Debug iframes
   if (msg.type === 'DEBUG_IFRAMES') {
     (async () => {
       try {
@@ -316,7 +320,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // Inyectar floater
   if (msg.type === 'INJECT_FLOATER') {
     (async () => {
       try {
@@ -331,7 +334,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // Intentar descarga directa
   if (msg.type === 'TRY_DOWNLOAD') {
     (async () => {
       try {
@@ -342,19 +344,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // Convertir HLS
   if (msg.type === 'CONVERT_HLS') {
     const { hlsUrl, title, referer, tabId, videoId } = msg.payload || {};
     startHLSDownload(tabId, hlsUrl, title, referer).then(sendResponse).catch(e => sendResponse({ ok: false, message: e.message }));
     return true;
   }
 
-  // Diagnostico de video
   if (msg.type === 'DIAGNOSE_VIDEO') {
     (async () => {
       const { vimeoId, tabId, pageUrl } = msg.payload || {};
       try {
-        const config = await fetchVimeoConfig(vimeoId, pageUrl);
+        const config = await getConfigFromPage(tabId, vimeoId);
+        if (!config) return sendResponse({ message: `ID: ${vimeoId} | Config no disponible en pagina. Asegurate de reproducir el video primero.` });
         const prog = config?.request?.files?.progressive || [];
         const hls = config?.request?.files?.hls?.cdns || {};
         const dl = config?.download || [];
@@ -368,23 +369,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // Config RAW
   if (msg.type === 'GET_RAW_CONFIG') {
     (async () => {
       const { tabId, vimeoId } = msg.payload || {};
       try {
-        // Intentar desde tab primero
-        let config = await execInTab(tabId, (vid) => {
-          return (window.__VIMEO_PAGE_CONFIGS__ || {})[vid] || null;
-        }, [String(vimeoId)]);
-
-        let source = 'tab-interceptor';
-        if (!config) {
-          config = await fetchVimeoConfig(vimeoId);
-          source = 'api-fetch';
-        }
-
-        if (!config) return sendResponse({ ok: false, message: 'Sin config.' });
+        const config = await getConfigFromPage(tabId, vimeoId);
+        if (!config) return sendResponse({ ok: false, message: 'Config no disponible. Reproduce el video primero.' });
 
         const files = config?.request?.files || config?.files || {};
         const prog = files?.progressive || [];
@@ -399,7 +389,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
         sendResponse({
           ok: true,
-          source,
+          source: 'page-interceptor',
           filesKeys: Object.keys(files),
           videoTitle: config?.video?.title || '',
           candidates
@@ -409,7 +399,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // Descarga desde popup directo
   if (msg.type === 'POPUP_START_DOWNLOAD') {
     startHLSDownload(msg.tabId, msg.hlsUrl, msg.filename, msg.pageUrl)
       .then(sendResponse).catch(e => sendResponse({ ok: false, message: e.message }));
