@@ -1,42 +1,41 @@
-/* downloader.js v9.6
+/* downloader.js v9.7
  * Conversor TS → MP4 usando ffmpeg.wasm (WebAssembly).
  *
- * Flujo:
- *  1. Recibe bloques Uint8Array via mensajes DOWNLOAD_CHUNK desde background.js
- *  2. En DOWNLOAD_FINALIZE ensambla todos los bloques
- *  3. Usa @ffmpeg/ffmpeg para remuxear MPEG-TS → MP4 real (-c copy, sin recodificar)
- *  4. Si ffmpeg.wasm falla o no carga → descarga los bytes como .ts.mp4 (abre en VLC)
+ * v9.7:
+ *  - Emite DOWNLOADER_READY cuando ffmpeg.wasm ya está cargado y listo,
+ *    de forma que background.js no envía chunks antes de tiempo.
+ *  - Carga ffmpeg.wasm tan pronto abre la tab (no espera DOWNLOAD_META).
+ *  - Fallback a descarga .mp4-TS si wasm falla.
  *
  * Mensajes entrantes: DOWNLOAD_META | DOWNLOAD_CHUNK | DOWNLOAD_FINALIZE
- * Mensajes salientes: DOWNLOAD_STARTED | DOWNLOAD_ERROR
+ * Mensajes salientes: DOWNLOADER_READY | DOWNLOAD_STARTED | DOWNLOAD_ERROR
  */
 
-import { FFmpeg } from 'https://esm.sh/@ffmpeg/ffmpeg@0.12.10';
-import { fetchFile, toBlobURL } from 'https://esm.sh/@ffmpeg/util@0.12.1';
+import { FFmpeg }           from 'https://esm.sh/@ffmpeg/ffmpeg@0.12.10';
+import { toBlobURL }        from 'https://esm.sh/@ffmpeg/util@0.12.1';
 
-// ── UI helpers ──────────────────────────────────────────────────────
+// ── UI helpers ────────────────────────────────────────────────────────────────
 const statusEl = document.getElementById('status');
 const barWrap  = document.getElementById('bar-wrap');
 const bar      = document.getElementById('bar');
 
 function log(msg, cls) {
-  statusEl.textContent += '\n' + msg;
-  if (cls) statusEl.className = cls;
+  const line = document.createElement('div');
+  line.textContent = msg;
+  if (cls) line.className = cls;
+  statusEl.appendChild(line);
   statusEl.scrollTop = statusEl.scrollHeight;
   console.log('[DL]', msg);
 }
-
 function setBar(pct) {
   barWrap.style.display = 'block';
   bar.style.width = Math.min(100, Math.max(0, pct)) + '%';
 }
-
 function sanitize(n) {
   return (n || 'video-vimeo')
     .replace(/[\\\/:\*\?"<>|]+/g, '-')
     .replace(/\s+/g, ' ').trim().slice(0, 160);
 }
-
 function triggerDownload(data, filename, mime) {
   const blob = new Blob([data], { type: mime });
   const url  = URL.createObjectURL(blob);
@@ -48,24 +47,73 @@ function triggerDownload(data, filename, mime) {
   setTimeout(() => URL.revokeObjectURL(url), 120_000);
 }
 
-// ── Estado ────────────────────────────────────────────────────────────
-let meta   = null;
+// ── Estado global ─────────────────────────────────────────────────────────────
+let meta     = null;
+let ffmpegInstance = null;   // instancia reutilizable
 const chunks = [];
 
-// ── Listener de mensajes ───────────────────────────────────────────────
+// ── Cargar ffmpeg.wasm INMEDIATAMENTE (no esperar chunks) ────────────────────
+log('Cargando ffmpeg.wasm…');
+setBar(5);
+
+async function loadFFmpeg() {
+  const ff = new FFmpeg();
+  ff.on('log', ({ message }) => {
+    if (/error|warning|Stream|Duration|Video|Audio|mux|demux/i.test(message)) log(message);
+  });
+  ff.on('progress', ({ progress }) => setBar(50 + Math.round(progress * 45)));
+
+  const CDNs = [
+    'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm',
+    'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm',
+  ];
+
+  for (const base of CDNs) {
+    try {
+      await ff.load({
+        coreURL: await toBlobURL(`${base}/ffmpeg-core.js`,   'text/javascript'),
+        wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
+      });
+      log('✅ ffmpeg.wasm listo (' + base.replace('https://','').split('/')[0] + ').', 'ok');
+      return ff;
+    } catch(e) {
+      log('⚠ CDN falló (' + base.split('/')[2] + '): ' + e.message);
+    }
+  }
+  throw new Error('Ningún CDN respondió para ffmpeg.wasm.');
+}
+
+// Arrancar carga y notificar al background cuando esté listo
+loadFFmpeg()
+  .then(ff => {
+    ffmpegInstance = ff;
+    setBar(20);
+    log('Esperando datos de video…');
+    // ── Avisar al background que ya estamos listos ─────────────────────────
+    chrome.runtime.sendMessage({ type: 'DOWNLOADER_READY' }).catch(() => {});
+  })
+  .catch(err => {
+    log('❌ ' + err.message + '. Modo fallback activado.', 'err');
+    ffmpegInstance = null;
+    // Aun así avisar para que background no espere indefinidamente
+    chrome.runtime.sendMessage({ type: 'DOWNLOADER_READY', fallback: true }).catch(() => {});
+  });
+
+// ── Listener de mensajes ─────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === 'DOWNLOAD_META') {
     meta = { filename: msg.filename || 'video-vimeo', totalChunks: msg.totalChunks };
     chunks.length = 0;
-    log('Recibiendo ' + msg.totalChunks + ' bloques: "' + meta.filename + '"');
+    log('Meta recibida: "' + meta.filename + '" | ' + msg.totalChunks + ' bloques.');
     sendResponse({ ok: true });
     return true;
   }
 
   if (msg.type === 'DOWNLOAD_CHUNK') {
     chunks[msg.index] = new Uint8Array(msg.data);
-    setBar(Math.round(((msg.index + 1) / (meta?.totalChunks || 1)) * 40));
+    const pct = Math.round(((msg.index + 1) / (meta?.totalChunks || 1)) * 25);
+    setBar(20 + pct);
     sendResponse({ ok: true });
     return true;
   }
@@ -77,7 +125,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return true;
     }
 
-    // Ensamblar chunks
+    // Ensamblar
     let total = 0;
     for (const c of chunks) if (c) total += c.length;
 
@@ -94,36 +142,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     for (const c of chunks) { if (c) { tsData.set(c, offset); offset += c.length; } }
 
     const sizeMB = Math.round(total / 1024 / 1024);
-    log('Ensamblado: ' + sizeMB + ' MB. Iniciando conversión…');
-    setBar(42);
+    log('Datos ensamblados: ' + sizeMB + ' MB.');
+    setBar(46);
 
     const filename = sanitize(meta.filename);
 
-    // Lanzar conversión async
-    convertToMp4(tsData, filename)
-      .then(mp4data => {
-        const mb = Math.round(mp4data.length / 1024 / 1024);
-        log('✅ MP4 listo (' + mb + ' MB). Descargando…', 'ok');
-        setBar(100);
-        triggerDownload(mp4data, filename + '.mp4', 'video/mp4');
-        chrome.runtime.sendMessage({
-          type: 'DOWNLOAD_STARTED',
-          format: 'mp4-ffmpeg',
-          sizeMB: mb
-        });
-      })
-      .catch(err => {
-        log('⚠ ffmpeg.wasm falló: ' + err.message, 'err');
-        log('Descargando como TS (abrir con VLC)…');
-        // Fallback: descargar los bytes TS con extension .mp4
-        // VLC, mpv y PotPlayer lo abren correctamente
-        triggerDownload(tsData, filename + '.mp4', 'video/mp4');
-        chrome.runtime.sendMessage({
-          type: 'DOWNLOAD_STARTED',
-          format: 'ts-fallback',
-          sizeMB: sizeMB
-        });
-      });
+    if (ffmpegInstance) {
+      runConvert(ffmpegInstance, tsData, filename, sizeMB);
+    } else {
+      log('⚠ ffmpeg no disponible — descargando como .mp4 (usar VLC).', 'err');
+      triggerDownload(tsData, filename + '.mp4', 'video/mp4');
+      chrome.runtime.sendMessage({ type: 'DOWNLOAD_STARTED', format: 'ts-fallback', sizeMB });
+    }
 
     sendResponse({ ok: true });
     return true;
@@ -132,85 +162,40 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true;
 });
 
-// ── Conversión con ffmpeg.wasm ───────────────────────────────────────────
-async function convertToMp4(tsData, filename) {
-  const ffmpeg = new FFmpeg();
-
-  // Redirigir logs de ffmpeg al panel
-  ffmpeg.on('log', ({ message }) => {
-    // Solo mostrar lineas relevantes (no spam de decodificacion)
-    if (/error|warning|mux|demux|Stream|Input|Output|Duration|Video|Audio/i.test(message)) {
-      log(message);
-    }
-  });
-
-  // Progreso de ffmpeg
-  ffmpeg.on('progress', ({ progress }) => {
-    setBar(42 + Math.round(progress * 55));  // 42% → 97%
-  });
-
-  log('Cargando ffmpeg.wasm…');
-
-  // Cargar el core de ffmpeg.wasm desde CDN
-  // Usamos la versión mt (multi-thread) con fallback a st (single-thread)
-  let loaded = false;
+// ── Conversión ───────────────────────────────────────────────────────────────
+async function runConvert(ff, tsData, filename, sizeMB) {
   try {
-    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
-    await ffmpeg.load({
-      coreURL:   await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
-      wasmURL:   await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+    log('Escribiendo input.ts (' + sizeMB + ' MB)…');
+    setBar(48);
+    await ff.writeFile('input.ts', tsData);
+
+    log('Remuxeando TS → MP4…');
+    setBar(50);
+    await ff.exec(['-i','input.ts','-c','copy','-movflags','+faststart','-y','output.mp4']);
+
+    log('Leyendo output.mp4…');
+    const mp4raw = await ff.readFile('output.mp4');
+    const mp4data = mp4raw instanceof Uint8Array ? mp4raw : new Uint8Array(mp4raw);
+
+    try { await ff.deleteFile('input.ts');   } catch(_) {}
+    try { await ff.deleteFile('output.mp4'); } catch(_) {}
+
+    if (!mp4data.length) throw new Error('ffmpeg generó un archivo vacío.');
+
+    const mb = Math.round(mp4data.length / 1024 / 1024);
+    log('✅ MP4 listo (' + mb + ' MB). Descargando…', 'ok');
+    setBar(100);
+
+    triggerDownload(mp4data, filename + '.mp4', 'video/mp4');
+    chrome.runtime.sendMessage({ type: 'DOWNLOAD_STARTED', format: 'mp4-ffmpeg', sizeMB: mb });
+
+  } catch(err) {
+    log('❌ Conversión falló: ' + err.message, 'err');
+    log('Descargando TS crudo (abrir con VLC)…');
+    triggerDownload(tsData, filename + '.mp4', 'video/mp4');
+    chrome.runtime.sendMessage({
+      type: 'DOWNLOAD_STARTED', format: 'ts-fallback', sizeMB,
+      warning: err.message
     });
-    loaded = true;
-    log('ffmpeg.wasm cargado (single-thread).');
-  } catch (e) {
-    log('⚠ Core ESM falló: ' + e.message + '. Intentando CDN alternativo…');
   }
-
-  if (!loaded) {
-    try {
-      const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
-      await ffmpeg.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-      });
-      loaded = true;
-      log('ffmpeg.wasm cargado (jsDelivr).');
-    } catch (e) {
-      throw new Error('No se pudo cargar ffmpeg.wasm: ' + e.message);
-    }
-  }
-
-  setBar(50);
-  log('Escribiendo archivo de entrada (' + Math.round(tsData.length / 1024 / 1024) + ' MB)…');
-
-  // Escribir el TS en el sistema de archivos virtual de ffmpeg
-  await ffmpeg.writeFile('input.ts', tsData);
-
-  log('Remuxeando TS → MP4 (sin recodificar)…');
-  setBar(55);
-
-  // Remux: -c copy = no recodifica, solo cambia el contenedor
-  // -movflags +faststart = pone el índice al inicio (mejor para streaming)
-  await ffmpeg.exec([
-    '-i', 'input.ts',
-    '-c', 'copy',
-    '-movflags', '+faststart',
-    '-y',
-    'output.mp4'
-  ]);
-
-  log('Leyendo MP4 generado…');
-  setBar(95);
-
-  const mp4data = await ffmpeg.readFile('output.mp4');
-
-  // Limpiar archivos virtuales
-  try { await ffmpeg.deleteFile('input.ts');   } catch (_) {}
-  try { await ffmpeg.deleteFile('output.mp4'); } catch (_) {}
-
-  if (!mp4data || mp4data.length === 0) {
-    throw new Error('ffmpeg generó un archivo vacío.');
-  }
-
-  return mp4data instanceof Uint8Array ? mp4data : new Uint8Array(mp4data);
 }
