@@ -5,6 +5,14 @@ chrome.runtime.onInstalled.addListener(async () => {
   if (!Array.isArray(settings.allowedDomains)) {
     await chrome.storage.local.set({ allowedDomains: [] });
   }
+  // Inyectar content script en todas las tabs abiertas al instalar/actualizar
+  const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
+  for (const tab of tabs) {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ['js/content.js'] });
+      await chrome.scripting.insertCSS({ target: { tabId: tab.id, allFrames: true }, files: ['css/content.css'] });
+    } catch (_) {}
+  }
 });
 
 async function fetchVimeoConfig(videoId) {
@@ -44,17 +52,11 @@ function extractProgressiveFiles(config) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
-    if (message?.type === 'GET_TAB_STATE') {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) throw new Error('No hay pestaña activa');
-      const result = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_PAGE' });
-      sendResponse({ ok: true, tab, ...result });
-      return;
-    }
     if (message?.type === 'GET_VIMEO_DOWNLOADS') {
       const settings = await getSettings();
       const senderUrl = sender.tab?.url || message.pageUrl || '';
-      const hostname = senderUrl ? new URL(senderUrl).hostname : '';
+      let hostname = '';
+      try { hostname = new URL(senderUrl).hostname; } catch (_) {}
       if (!domainMatches(hostname, settings.allowedDomains)) {
         sendResponse({ ok: false, error: 'Dominio no autorizado en Opciones.' });
         return;
