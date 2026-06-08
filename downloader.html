@@ -2,16 +2,38 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Vimeo Downloader - Conversor</title>
+  <title>Vimeo — Conversor MP4</title>
   <style>
-    body { font-family: sans-serif; background: #111; color: #eee; padding: 20px; font-size:14px; }
-    #status { margin-top: 12px; padding: 10px; background: #222; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
-    .ok  { color: #4caf50; }
-    .err { color: #f44336; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Consolas', monospace;
+      background: #0f172a; color: #94a3b8;
+      padding: 16px; font-size: 12px;
+      min-width: 300px;
+    }
+    h3 { color: #e2e8f0; font-size: 13px; margin-bottom: 10px; }
+    #bar-wrap {
+      background: #1e293b; border-radius: 6px;
+      overflow: hidden; height: 8px; margin: 8px 0;
+      display: none;
+    }
+    #bar { height: 100%; width: 0%; background: #0ea5e9;
+           transition: width .3s ease; }
+    #status {
+      background: #1e293b; border-radius: 6px;
+      padding: 8px 10px; margin-top: 8px;
+      white-space: pre-wrap; word-break: break-all;
+      max-height: 280px; overflow-y: auto;
+      font-size: 11px; line-height: 1.6;
+    }
+    .ok  { color: #86efac; }
+    .err { color: #fca5a5; }
   </style>
 </head>
 <body>
+  <h3>🎥 Conversor MP4</h3>
+  <div id="bar-wrap"><div id="bar"></div></div>
   <div id="status">Esperando datos…</div>
-  <script src="downloader.js"></script>
+  <script type="module" src="downloader.js"></script>
 </body>
 </html>
