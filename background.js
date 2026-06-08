@@ -1,28 +1,27 @@
-/* background.js v9.7
+/* background.js v9.8
  *
  * Estrategias de obtención del playerConfig (en orden):
  *  1. playerConfig desde iframe ya cargado en la página (world:MAIN)
  *  2. postMessage interceptado por vimeo_interceptor.js
  *  3. config.js público sin autenticación
  *  4. config.js CON cookies de sesión de Vimeo (credentials:include)
- *  5. Abrir player.vimeo.com en tab oculta y extraer config desde adentro
+ *  5. Abrir player.vimeo.com en tab oculta y extraer config
  *  6. oEmbed (solo metadata)
  *
  * Descarga:
- *  A. MP4 progresivo directo
- *  B. HLS -> segmentos -> ffmpeg.wasm remux -> .mp4
+ *  A. MP4 progresivo directo (chrome.downloads)
+ *  B. HLS → segmentos → Offscreen Document (ffmpeg.wasm) → .mp4
  *
- * v9.7: fix timeout tab
- *  - waitTabComplete: 60 s (antes 15 s) — da tiempo a que el DOM cargue
- *  - triggerMp4Download: espera mensaje DOWNLOADER_READY (emitido por downloader.js
- *    cuando ffmpeg.wasm ya está cargado) antes de enviar chunks.
- *    Timeout READY: 90 s | Timeout conversión final: 300 s
+ * v9.8: arquitectura Offscreen Document
+ *  - Sin tabs visibles para la conversión
+ *  - ffmpeg.wasm carga UNA vez y se reutiliza
+ *  - Sin timeouts frágiles de tab
  */
 'use strict';
 
 const CHUNK_SIZE = 4 * 1024 * 1024;
 
-// ── Utils ────────────────────────────────────────────────────────────────────
+// ── Utils ─────────────────────────────────────────────────────────────────────
 function safeFilename(n) {
   return (n || 'video-vimeo')
     .replace(/[\\/:*?"<>|]+/g, '-')
@@ -68,7 +67,69 @@ async function ensureFloater(tabId) {
   } catch(e) { console.warn('[VD] ensureFloater:', e.message); }
 }
 
-// ── Obtener embeds ───────────────────────────────────────────────────────────
+// ── Offscreen Document ────────────────────────────────────────────────────────
+let offscreenCreating = false;
+let offscreenReady    = false;
+
+async function ensureOffscreen() {
+  // Verificar si ya existe
+  const existing = await chrome.offscreen.hasDocument?.();
+  if (existing) return;
+
+  if (offscreenCreating) {
+    // Esperar a que termine la creación en curso
+    await new Promise(r => setTimeout(r, 500));
+    return;
+  }
+
+  offscreenCreating = true;
+  try {
+    await chrome.offscreen.createDocument({
+      url:    chrome.runtime.getURL('offscreen.html'),
+      reasons: ['WORKERS'],
+      justification: 'Cargar ffmpeg.wasm para convertir segmentos HLS a MP4'
+    });
+  } catch(e) {
+    // Puede fallar si ya existe (race condition)
+    console.warn('[VD] createDocument:', e.message);
+  } finally {
+    offscreenCreating = false;
+  }
+}
+
+/**
+ * Espera a que offscreen.js emita OFFSCREEN_READY.
+ * Si ya está listo (flag offscreenReady), resuelve inmediatamente.
+ * Timeout 120 s para la carga inicial de WASM desde CDN.
+ */
+async function waitOffscreenReady(ms = 120_000) {
+  if (offscreenReady) return;
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      chrome.runtime.onMessage.removeListener(l);
+      reject(new Error('Timeout cargando ffmpeg.wasm (' + Math.round(ms/1000) + 's). Verifica tu conexión a internet.'));
+    }, ms);
+    function l(msg) {
+      if (msg?.type === 'OFFSCREEN_READY') {
+        clearTimeout(t);
+        chrome.runtime.onMessage.removeListener(l);
+        offscreenReady = msg.ok !== false;
+        resolve();
+      }
+    }
+    chrome.runtime.onMessage.addListener(l);
+  });
+}
+
+// Escuchar OFFSCREEN_READY de forma global para cachear el estado
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type === 'OFFSCREEN_READY') {
+    offscreenReady = msg.ok !== false;
+    console.log('[VD] Offscreen READY, ok =', offscreenReady);
+  }
+});
+
+// ── Obtener embeds ────────────────────────────────────────────────────────────
 async function getEmbeds(tabId) {
   await ensureScripts(tabId);
   await new Promise(r => setTimeout(r, 700));
@@ -79,7 +140,7 @@ async function getEmbeds(tabId) {
   );
 }
 
-// ── Estrategia 1+2: playerConfig desde página ───────────────────────────────
+// ── Estrategia 1+2: playerConfig desde página ─────────────────────────────────
 async function getPlayerConfigFromPage(tabId, videoId) {
   return runInPage(tabId, (vid) =>
     typeof window.__getVimeoConfig === 'function'
@@ -88,7 +149,7 @@ async function getPlayerConfigFromPage(tabId, videoId) {
   , [String(videoId)]);
 }
 
-// ── Estrategia 3: config.js sin auth ────────────────────────────────────────
+// ── Estrategia 3: config.js sin auth ──────────────────────────────────────────
 async function fetchConfigJs(videoId, referer) {
   const urls = [
     `https://player.vimeo.com/video/${videoId}/config`,
@@ -106,7 +167,7 @@ async function fetchConfigJs(videoId, referer) {
   return null;
 }
 
-// ── Estrategia 4: config.js CON cookies de sesión ───────────────────────────
+// ── Estrategia 4: config.js CON cookies ───────────────────────────────────────
 async function fetchConfigJsWithCookies(videoId, referer) {
   const urls = [
     `https://player.vimeo.com/video/${videoId}/config`,
@@ -117,8 +178,7 @@ async function fetchConfigJsWithCookies(videoId, referer) {
     try {
       const res = await fetch(url, {
         headers: { 'Referer': ref, 'Origin': new URL(ref).origin },
-        credentials: 'include',
-        mode: 'cors'
+        credentials: 'include', mode: 'cors'
       });
       if (!res.ok) continue;
       const json = await res.json();
@@ -128,37 +188,28 @@ async function fetchConfigJsWithCookies(videoId, referer) {
   return null;
 }
 
-// ── Estrategia 5: abrir player en tab oculta ────────────────────────────────
+// ── Estrategia 5: tab oculta ──────────────────────────────────────────────────
 async function fetchConfigViaHiddenTab(videoId, pageUrl) {
   return new Promise(async (resolve) => {
     const playerUrl = `https://player.vimeo.com/video/${videoId}?autoplay=0&dnt=1`;
     let tabId;
-    try {
-      const tab = await chrome.tabs.create({ url: playerUrl, active: false });
-      tabId = tab.id;
-    } catch(e) { return resolve(null); }
-
+    try { const tab = await chrome.tabs.create({ url: playerUrl, active: false }); tabId = tab.id; }
+    catch(e) { return resolve(null); }
     const cleanup = () => chrome.tabs.remove(tabId).catch(() => {});
     const timeout = setTimeout(() => { cleanup(); resolve(null); }, 12000);
-
     const msgListener = (msg) => {
       if (msg?.__vimeoExtConfig && String(msg.videoId) === String(videoId)) {
-        clearTimeout(timeout);
-        chrome.runtime.onMessage.removeListener(msgListener);
-        cleanup();
-        resolve(msg.config);
+        clearTimeout(timeout); chrome.runtime.onMessage.removeListener(msgListener); cleanup(); resolve(msg.config);
       }
     };
     chrome.runtime.onMessage.addListener(msgListener);
-
     chrome.tabs.onUpdated.addListener(async function listener(id, info) {
       if (id !== tabId || info.status !== 'complete') return;
       chrome.tabs.onUpdated.removeListener(listener);
       await new Promise(r => setTimeout(r, 1000));
       try {
         const result = await chrome.scripting.executeScript({
-          target: { tabId },
-          world: 'MAIN',
+          target: { tabId }, world: 'MAIN',
           func: () => {
             for (const k of ['playerConfig','__playerConfig','config']) {
               try { const v = window[k]; if (v?.request?.files && v?.video?.id) return v; } catch(_){}
@@ -170,24 +221,16 @@ async function fetchConfigViaHiddenTab(videoId, pageUrl) {
           }
         });
         const cfg = result?.[0]?.result;
-        if (cfg) {
-          clearTimeout(timeout);
-          chrome.runtime.onMessage.removeListener(msgListener);
-          cleanup();
-          resolve(cfg);
-        }
+        if (cfg) { clearTimeout(timeout); chrome.runtime.onMessage.removeListener(msgListener); cleanup(); resolve(cfg); }
       } catch(_) {}
     });
   });
 }
 
-// ── Estrategia 6: oEmbed ─────────────────────────────────────────────────────
+// ── Estrategia 6: oEmbed ──────────────────────────────────────────────────────
 async function fetchOEmbed(videoId) {
   try {
-    const res = await fetch(
-      `https://vimeo.com/api/oembed.json?url=https://vimeo.com/${videoId}&width=1920`,
-      { credentials: 'include' }
-    );
+    const res = await fetch(`https://vimeo.com/api/oembed.json?url=https://vimeo.com/${videoId}&width=1920`, { credentials: 'include' });
     if (!res.ok) return null;
     const data = await res.json();
     if (!data?.title && !data?.html) return null;
@@ -195,25 +238,20 @@ async function fetchOEmbed(videoId) {
   } catch(_) { return null; }
 }
 
-// ── Parsear candidatos ───────────────────────────────────────────────────────
+// ── Parsear candidatos ────────────────────────────────────────────────────────
 function parseCandidates(config) {
   const out = [], seen = new Set();
   function add(c) { if (c?.url && !seen.has(c.url)) { seen.add(c.url); out.push(c); } }
-
   const prog = config?.request?.files?.progressive || config?.files?.progressive || [];
   if (Array.isArray(prog))
     prog.forEach(f => { if (f?.url) add({ source:'progressive', quality:String(f.quality||f.height||'sd'), height:Number(f.height||0), mime:'video/mp4', url:f.url, size:f.size||null }); });
-
   const dl = config?.download || config?.request?.files?.download || [];
   if (Array.isArray(dl))
     dl.forEach(f => { const u=f?.link||f?.url; if(u) add({ source:'download', quality:String(f.quality||f.height||'sd'), height:Number(f.height||0), mime:'video/mp4', url:u, size:f.size||null }); });
-
   const hlsCdns = config?.request?.files?.hls?.cdns || config?.files?.hls?.cdns || {};
   Object.values(hlsCdns).forEach(c => { if(c?.url) add({ source:'hls', quality:'hls', height:0, mime:'application/x-mpegURL', url:c.url }); });
-
   const hlsUrl = config?.request?.files?.hls?.url || config?.files?.hls?.url;
   if (hlsUrl) add({ source:'hls', quality:'hls', height:0, mime:'application/x-mpegURL', url:hlsUrl });
-
   function deepMp4(obj, d) {
     if (!obj || d > 6) return;
     if (typeof obj === 'string') { if (/\.mp4/i.test(obj) && /^https?:\/\//.test(obj)) add({ source:'deep', quality:'unknown', height:0, mime:'video/mp4', url:obj }); return; }
@@ -228,7 +266,7 @@ function pickBestDirect(c) {
 }
 function pickBestHls(c) { return c.find(x => x.source==='hls') || null; }
 
-// ── HLS downloader ───────────────────────────────────────────────────────────
+// ── HLS downloader ────────────────────────────────────────────────────────────
 async function resolveM3u8(url, referer) {
   const h = referer ? { 'Referer': referer } : {};
   const res = await fetch(url, { headers:h });
@@ -259,7 +297,7 @@ async function downloadAllSegments(manifestUrl, manifestText, referer, tabId, vi
   for (let j=0;j<segs.length;j++) {
     const segUrl = segs[j].startsWith('http') ? segs[j] : base+segs[j];
     if (j%5===0||j===segs.length-1)
-      sendProgress('Segmento '+(j+1)+'/'+segs.length, Math.round((j/segs.length)*60)+8, tabId, videoId, title);
+      sendProgress('Segmento '+(j+1)+'/'+segs.length, Math.round((j/segs.length)*40)+5, tabId, videoId, title);
     let attempts=4;
     while (attempts-->0) {
       try {
@@ -268,137 +306,54 @@ async function downloadAllSegments(manifestUrl, manifestText, referer, tabId, vi
       } catch(e) { if(attempts===0) throw new Error('Seg '+(j+1)+': '+e.message); await new Promise(r=>setTimeout(r,1000)); }
     }
   }
-  sendProgress('Ensamblando '+Math.round(totalBytes/1024/1024)+' MB…', 70, tabId, videoId, title);
+  sendProgress('Ensamblando '+Math.round(totalBytes/1024/1024)+' MB…', 46, tabId, videoId, title);
   const merged=new Uint8Array(totalBytes); let offset=0;
   for (const buf of buffers) { merged.set(new Uint8Array(buf),offset); offset+=buf.byteLength; }
   return merged;
 }
 
-// ── Blob download via tab ────────────────────────────────────────────────────
+// ── Conversión via Offscreen Document ────────────────────────────────────────
+async function convertWithOffscreen(tsData, filename, tabId, videoId, title) {
+  // Asegurar que el documento offscreen existe
+  sendProgress('Preparando conversor…', 47, tabId, videoId, title);
+  await ensureOffscreen();
 
-/**
- * Espera a que la tab termine de cargar el HTML (status:complete).
- * Timeout 60 s — solo el HTML, no el WASM.
- */
-async function waitTabComplete(tabId, ms = 60_000) {
+  // Si WASM no está listo aún, esperar (120 s max)
+  if (!offscreenReady) {
+    sendProgress('Cargando ffmpeg.wasm (primera vez ~30s)…', 48, tabId, videoId, title);
+    await waitOffscreenReady(120_000);
+  }
+
+  sendProgress('Convirtiendo TS→MP4…', 50, tabId, videoId, title);
+
   return new Promise((resolve, reject) => {
-    const t = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(l);
-      reject(new Error('Timeout cargando tab ('+Math.round(ms/1000)+'s).'));
-    }, ms);
-    function l(id, info) {
-      if (id !== tabId || info.status !== 'complete') return;
-      clearTimeout(t);
-      chrome.tabs.onUpdated.removeListener(l);
-      setTimeout(resolve, 300);
-    }
-    chrome.tabs.onUpdated.addListener(l);
-  });
-}
-
-/**
- * Espera a que downloader.js emita DOWNLOADER_READY (ffmpeg.wasm ya cargado).
- * Timeout 90 s — CDN puede tardar en primera carga.
- */
-async function waitDownloaderReady(dlTabId, ms = 90_000) {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => {
-      chrome.runtime.onMessage.removeListener(l);
-      reject(new Error('Timeout esperando DOWNLOADER_READY ('+Math.round(ms/1000)+'s). CDN de ffmpeg.wasm no respondió.'));
-    }, ms);
-    function l(msg, sender) {
-      if (sender.tab?.id !== dlTabId) return;
-      if (msg?.type === 'DOWNLOADER_READY') {
-        clearTimeout(t);
-        chrome.runtime.onMessage.removeListener(l);
-        resolve();
+    // Escuchar respuesta del offscreen
+    const handler = (msg) => {
+      if (msg?.type === 'OFFSCREEN_PROGRESS') {
+        sendProgress(msg.msg, msg.pct, tabId, videoId, title);
+        return;
       }
-    }
-    chrome.runtime.onMessage.addListener(l);
-  });
-}
-
-async function triggerMp4Download(tsData, filename, tabId, videoId, title) {
-  return new Promise(async (resolve, reject) => {
-    sendProgress('Abriendo conversor MP4…', 72, tabId, videoId, title);
-
-    let dlTabId;
-    try {
-      const tab = await chrome.tabs.create({ url: chrome.runtime.getURL('downloader.html'), active: false });
-      dlTabId = tab.id;
-    } catch(e) {
-      return reject(new Error('No se pudo crear tab: ' + e.message));
-    }
-
-    const cleanup = () => chrome.tabs.remove(dlTabId).catch(() => {});
-
-    try {
-      // ── Paso 1: esperar que el HTML cargue (DOM ready) ─────────────────
-      sendProgress('Cargando conversor…', 72, tabId, videoId, title);
-      await waitTabComplete(dlTabId, 60_000);
-
-      // ── Paso 2: esperar que ffmpeg.wasm esté listo (puede tardar ~30s) ─
-      sendProgress('Cargando ffmpeg.wasm (primera vez ~30s)…', 73, tabId, videoId, title);
-      await waitDownloaderReady(dlTabId, 90_000);
-
-      // ── Paso 3: transferir chunks ───────────────────────────────────────
-      const totalChunks = Math.ceil(tsData.length / CHUNK_SIZE);
-      sendProgress('Transfiriendo ' + Math.round(tsData.length / 1024 / 1024) + ' MB…', 74, tabId, videoId, title);
-
-      await chrome.tabs.sendMessage(dlTabId, {
-        type: 'DOWNLOAD_META', filename, mime: 'video/mp2t', totalChunks
-      });
-
-      for (let i = 0; i < totalChunks; i++) {
-        const start = i * CHUNK_SIZE;
-        const slice = tsData.slice(start, Math.min(start + CHUNK_SIZE, tsData.length));
-        await chrome.tabs.sendMessage(dlTabId, {
-          type: 'DOWNLOAD_CHUNK', index: i, data: Array.from(slice)
-        });
-        sendProgress(
-          'Parte ' + (i+1) + '/' + totalChunks,
-          74 + Math.round(((i+1) / totalChunks) * 18),
-          tabId, videoId, title
-        );
+      if (msg?.type === 'OFFSCREEN_DONE') {
+        chrome.runtime.onMessage.removeListener(handler);
+        resolve({ blobUrl: msg.blobUrl, filename: msg.filename, sizeMB: msg.sizeMB });
+        return;
       }
+      if (msg?.type === 'OFFSCREEN_ERROR') {
+        chrome.runtime.onMessage.removeListener(handler);
+        reject(new Error(msg.error));
+      }
+    };
+    chrome.runtime.onMessage.addListener(handler);
 
-      // ── Paso 4: esperar conversión (hasta 5 min para videos largos) ────
-      sendProgress('Convirtiendo TS→MP4…', 93, tabId, videoId, title);
-
-      await new Promise((res2, rej2) => {
-        const t2 = setTimeout(() => {
-          chrome.runtime.onMessage.removeListener(onDone);
-          cleanup();
-          rej2(new Error('Timeout conversión (300s).'));
-        }, 300_000);
-
-        function onDone(m, sender) {
-          if (sender.tab?.id !== dlTabId) return;
-          if (m?.type === 'DOWNLOAD_STARTED' || m?.type === 'DOWNLOAD_ERROR') {
-            clearTimeout(t2);
-            chrome.runtime.onMessage.removeListener(onDone);
-            cleanup();
-            if (m.type === 'DOWNLOAD_STARTED') res2(m);
-            else rej2(new Error(m.error || 'Error en conversión.'));
-          }
-        }
-        chrome.runtime.onMessage.addListener(onDone);
-
-        chrome.tabs.sendMessage(dlTabId, { type: 'DOWNLOAD_FINALIZE' })
-          .catch(e => {
-            clearTimeout(t2);
-            chrome.runtime.onMessage.removeListener(onDone);
-            cleanup();
-            rej2(new Error('FINALIZE: ' + e.message));
-          });
-      });
-
-      resolve();
-
-    } catch(e) {
-      cleanup();
-      reject(new Error('Transfer: ' + e.message));
-    }
+    // Enviar datos al offscreen (transferir ArrayBuffer para eficiencia)
+    chrome.runtime.sendMessage({
+      type:     'OFFSCREEN_CONVERT',
+      tsData:   tsData.buffer,
+      filename: filename
+    }).catch(e => {
+      chrome.runtime.onMessage.removeListener(handler);
+      reject(new Error('No se pudo contactar el conversor: ' + e.message));
+    });
   });
 }
 
@@ -407,11 +362,31 @@ async function convertHlsToMp4(hlsUrl, title, referer, tabId, videoId) {
   const manifest = await resolveM3u8(hlsUrl, referer);
   const tsData   = await downloadAllSegments(manifest.url, manifest.text, referer, tabId, videoId, title);
   const sizeMB   = Math.round(tsData.length / 1024 / 1024);
-  await triggerMp4Download(tsData, title, tabId, videoId, title);
-  return { ok: true, size: sizeMB };
+
+  try {
+    const result = await convertWithOffscreen(tsData, title, tabId, videoId, title);
+    // Descargar desde la blob URL generada en offscreen
+    await chrome.downloads.download({
+      url:            result.blobUrl,
+      filename:       result.filename,
+      saveAs:         false,
+      conflictAction: 'uniquify'
+    });
+    sendProgress('✅ MP4 descargando (' + result.sizeMB + ' MB).', 100, tabId, videoId, title);
+    return { ok: true, size: result.sizeMB };
+
+  } catch (err) {
+    // Fallback: guardar como .mp4 (contenido TS — abre con VLC)
+    sendProgress('⚠ Conversión falló: ' + err.message + '. Guardando TS…', 95, tabId, videoId, title);
+    const blob = new Blob([tsData], { type: 'video/mp4' });
+    const url  = URL.createObjectURL(blob);
+    await chrome.downloads.download({ url, filename: title + '.mp4', saveAs: false, conflictAction: 'uniquify' });
+    sendProgress('⚠ Descargado como TS (usar VLC para reproducir).', 100, tabId, videoId, title);
+    return { ok: true, size: sizeMB, fallback: true };
+  }
 }
 
-// ── Función principal de descarga ───────────────────────────────────────────
+// ── Función principal de descarga ─────────────────────────────────────────────
 async function tryDownload(payload) {
   const { vimeoId, tabId, pageUrl, preferredName } = payload;
   const referer = pageUrl || 'https://vimeo.com/';
@@ -427,12 +402,10 @@ async function tryDownload(payload) {
     sendProgress('Consultando config.js…', 8, tabId, vimeoId, preferredName);
     try { config = await fetchConfigJs(vimeoId, referer); if (config) configSource = 'config.js'; } catch(_) {}
   }
-
   if (!config) {
     sendProgress('Consultando config.js + cookies…', 14, tabId, vimeoId, preferredName);
     try { config = await fetchConfigJsWithCookies(vimeoId, referer); if (config) configSource = 'config.js+cookies'; } catch(_) {}
   }
-
   if (!config) {
     sendProgress('Abriendo player en segundo plano…', 20, tabId, vimeoId, preferredName);
     try { config = await fetchConfigViaHiddenTab(vimeoId, pageUrl); if (config) configSource = 'hidden-tab'; } catch(_) {}
@@ -485,18 +458,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const iframes = await runInPage(tab.id, () => Array.from(document.querySelectorAll('iframe')).map(f => ({src:f.src||'',dataSrc:f.getAttribute('data-src')||'',className:f.className||'',id:f.id||''})));
       return sendResponse({ok:true,iframes:iframes||[]});
     }
-
     if (type === 'GET_EMBEDS') {
       const tab = await getActiveTab(); if (!tab) return sendResponse({ok:false,message:'Sin pestaña activa.'});
       const embeds = await getEmbeds(tab.id);
       return sendResponse({ok:true,embeds:embeds||[],tabId:tab.id,pageUrl:tab.url});
     }
-
     if (type === 'INJECT_FLOATER') {
       const tab = await getActiveTab(); if (!tab) return sendResponse({ok:false});
       await ensureFloater(tab.id); return sendResponse({ok:true});
     }
-
     if (type === 'GET_RAW_CONFIG') {
       const r = await getPlayerConfigFromPage(payload.tabId, payload.vimeoId);
       if (!r?.config) {
@@ -512,7 +482,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const cands = parseCandidates(r.config);
       return sendResponse({ok:true,filesKeys:Object.keys(r.config?.request?.files||{}),candidates:cands,videoTitle:r.config?.video?.title||'',source:r.source});
     }
-
     if (type === 'DIAGNOSE_VIDEO') {
       let cfg = null, src = 'none';
       try { const r = await getPlayerConfigFromPage(payload.tabId,payload.vimeoId); if(r?.config){cfg=r.config;src=r.source;} } catch(_){}
@@ -527,7 +496,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const cands=parseCandidates(cfg),direct=pickBestDirect(cands),hls=pickBestHls(cands);
       return sendResponse({ok:true,message:'✅ "'+(cfg.video?.title||'?')+'" | Fuente: '+src+' | MP4: '+(direct?direct.source+' '+direct.quality:'NO')+' | HLS: '+(hls?'SÍ':'NO')+' | Candidatos: '+cands.length});
     }
-
     if (type === 'TRY_DOWNLOAD') {
       const {allowedHost} = await chrome.storage.local.get(['allowedHost']);
       if (!allowedHost) return sendResponse({ok:false,message:'Primero guarda el dominio permitido.'});
@@ -536,22 +504,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const result = await tryDownload(payload);
       return sendResponse(result);
     }
-
     if (type === 'CONVERT_HLS') {
       try {
         const res = await convertHlsToMp4(payload.hlsUrl, payload.title, payload.referer, payload.tabId, payload.videoId);
-        return sendResponse({ok:true,message:'✅ MP4 descargado ('+res.size+' MB)'});
+        return sendResponse({ok:true,message:'✅ MP4 descargado ('+(res.size||'?')+' MB)'+(res.fallback?' [TS-fallback]':'')});
       } catch(e) {
-        sendProgress('❌ '+e.message, -1, payload.tabId, payload.videoId, payload.title);
+        sendProgress('❌ '+e.message,-1,payload.tabId,payload.videoId,payload.title);
         return sendResponse({ok:false,message:'❌ '+e.message});
       }
     }
-
     if (type === '__VIMEO_CONFIG_FROM_FRAME__') {
       chrome.runtime.sendMessage({ __vimeoExtConfig:true, videoId:msg.videoId, config:msg.config }).catch(()=>{});
       return sendResponse({ok:true});
     }
-
   })();
   return true;
 });
+
+// ── Iniciar offscreen al arrancar el service worker ───────────────────────────
+// Esto precarga ffmpeg.wasm antes de que el usuario presione Descargar
+ensureOffscreen().catch(e => console.warn('[VD] init offscreen:', e.message));
