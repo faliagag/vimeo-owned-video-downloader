@@ -1,121 +1,64 @@
-/* offscreen.js v9.8
- * Corre como Offscreen Document (MV3).
- * Carga ffmpeg.wasm UNA SOLA VEZ y lo reutiliza para todas las conversiones.
- *
- * Mensajes que escucha (desde background.js via chrome.runtime.sendMessage):
- *   { type: 'OFFSCREEN_CONVERT', tsData: ArrayBuffer, filename: string }
- *
- * Mensajes que emite:
- *   { type: 'OFFSCREEN_READY' }                   — wasm cargado y listo
- *   { type: 'OFFSCREEN_PROGRESS', pct, msg }       — progreso de conversion
- *   { type: 'OFFSCREEN_DONE', blobUrl, filename }  — conversion exitosa
- *   { type: 'OFFSCREEN_ERROR', error }             — fallo
- */
+// offscreen.js v9.9 — concatenacion binaria TS pura, sin ffmpeg/WASM
+// Los segmentos HLS de Vimeo son MPEG-TS con H.264+AAC.
+// Concatenar los buffers produce un archivo .ts reproducible directamente
+// por VLC, mpv, y la mayoria de reproductores modernos.
+// Chrome/Edge NO reproducen .ts nativamente, pero VLC si.
+// Para maxima compatibilidad entregamos extension .ts con MIME video/mp2t.
 
-import { FFmpeg }    from 'https://esm.sh/@ffmpeg/ffmpeg@0.12.10';
-import { toBlobURL } from 'https://esm.sh/@ffmpeg/util@0.12.1';
-
-const ff = new FFmpeg();
-let   ready = false;
-
-// ── Progreso de ffmpeg ────────────────────────────────────────────────────────
-ff.on('progress', ({ progress }) => {
-  chrome.runtime.sendMessage({
-    type: 'OFFSCREEN_PROGRESS',
-    pct:  50 + Math.round(progress * 45),
-    msg:  'Convirtiendo… ' + Math.round(progress * 100) + '%'
-  }).catch(() => {});
-});
-
-ff.on('log', ({ message }) => {
-  if (/error|warning|Stream|Duration|Video|Audio/i.test(message)) {
-    console.log('[offscreen ffmpeg]', message);
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type === 'CONVERT_TS_TO_MP4') {
+    handleConvert(msg).then(sendResponse).catch(e => sendResponse({ ok: false, error: e.message }));
+    return true; // async
   }
 });
 
-// ── Cargar WASM al iniciar ────────────────────────────────────────────────────
-async function loadWasm() {
-  const CDNs = [
-    'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm',
-    'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm',
-  ];
-  for (const base of CDNs) {
-    try {
-      await ff.load({
-        coreURL: await toBlobURL(`${base}/ffmpeg-core.js`,   'text/javascript'),
-        wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
-      });
-      console.log('[offscreen] ffmpeg.wasm listo desde', base);
-      return true;
-    } catch (e) {
-      console.warn('[offscreen] CDN falló:', base, e.message);
+async function handleConvert({ segments, filename }) {
+  try {
+    log('Recibidos ' + segments.length + ' segmentos. Concatenando...');
+
+    // Concatenar todos los ArrayBuffer en uno solo
+    const totalBytes = segments.reduce((acc, s) => acc + s.byteLength, 0);
+    const merged = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const seg of segments) {
+      merged.set(new Uint8Array(seg), offset);
+      offset += seg.byteLength;
     }
+
+    log('Total: ' + (totalBytes / 1024 / 1024).toFixed(2) + ' MB. Creando Blob...');
+
+    // Crear Blob y URL de objeto (disponible en Offscreen Document)
+    const blob = new Blob([merged], { type: 'video/mp2t' });
+    const url = URL.createObjectURL(blob);
+
+    // Nombre de archivo con extension .ts
+    const tsFilename = filename.replace(/\.(mp4|mkv|webm)$/i, '') + '.ts';
+
+    log('Iniciando descarga: ' + tsFilename);
+
+    // Usar chrome.downloads desde el offscreen no esta disponible;
+    // devolvemos la URL al background para que el SW haga la descarga.
+    // PERO URL.createObjectURL es local al offscreen — no podemos pasarla.
+    // Solucion: convertir a base64 data URL y descargar desde background.
+    const dataUrl = await blobToDataUrl(blob);
+
+    return { ok: true, dataUrl, filename: tsFilename, bytes: totalBytes };
+
+  } catch (e) {
+    log('ERROR: ' + e.message);
+    return { ok: false, error: e.message };
   }
-  return false;
 }
 
-loadWasm().then(ok => {
-  ready = ok;
-  chrome.runtime.sendMessage({ type: 'OFFSCREEN_READY', ok }).catch(() => {});
-  console.log('[offscreen] READY emitido, ok =', ok);
-});
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
 
-// ── Listener de mensajes ──────────────────────────────────────────────────────
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.type !== 'OFFSCREEN_CONVERT') return true;
-
-  (async () => {
-    const { tsData, filename } = msg;
-
-    if (!ready || !ff) {
-      // Fallback: devolver los bytes tal cual para que background los descargue
-      chrome.runtime.sendMessage({
-        type: 'OFFSCREEN_ERROR',
-        error: 'ffmpeg.wasm no disponible — descargando TS crudo.',
-        fallbackData: tsData   // ArrayBuffer original
-      }).catch(() => {});
-      sendResponse({ ok: false });
-      return;
-    }
-
-    try {
-      chrome.runtime.sendMessage({ type: 'OFFSCREEN_PROGRESS', pct: 47, msg: 'Escribiendo input.ts…' }).catch(() => {});
-      await ff.writeFile('input.ts', new Uint8Array(tsData));
-
-      chrome.runtime.sendMessage({ type: 'OFFSCREEN_PROGRESS', pct: 50, msg: 'Remuxeando TS→MP4…' }).catch(() => {});
-      await ff.exec(['-i', 'input.ts', '-c', 'copy', '-movflags', '+faststart', '-y', 'output.mp4']);
-
-      const raw = await ff.readFile('output.mp4');
-      const mp4 = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
-
-      try { await ff.deleteFile('input.ts');   } catch (_) {}
-      try { await ff.deleteFile('output.mp4'); } catch (_) {}
-
-      if (!mp4.length) throw new Error('ffmpeg generó un archivo vacío.');
-
-      // Crear blob URL en el contexto offscreen y pasarla al background
-      const blob    = new Blob([mp4], { type: 'video/mp4' });
-      const blobUrl = URL.createObjectURL(blob);
-      const sizeMB  = Math.round(mp4.length / 1024 / 1024);
-
-      chrome.runtime.sendMessage({
-        type: 'OFFSCREEN_DONE',
-        blobUrl,
-        filename: filename + '.mp4',
-        sizeMB
-      }).catch(() => {});
-
-      sendResponse({ ok: true });
-
-    } catch (err) {
-      chrome.runtime.sendMessage({
-        type: 'OFFSCREEN_ERROR',
-        error: err.message,
-        fallbackData: tsData
-      }).catch(() => {});
-      sendResponse({ ok: false, error: err.message });
-    }
-  })();
-
-  return true;  // mantener canal abierto
-});
+function log(msg) {
+  chrome.runtime.sendMessage({ type: 'OFFSCREEN_LOG', msg }).catch(() => {});
+}
