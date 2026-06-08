@@ -9,15 +9,20 @@
 <body>
   <main class="wrap narrow">
     <h1>Opciones</h1>
-    <p class="muted">Define los dominios donde la extensión puede operar.</p>
-    <label for="domains">Dominios permitidos (uno por línea)</label>
-    <textarea id="domains" rows="12" placeholder="midominio.cl&#10;www.midominio.cl"></textarea>
+    <p class="muted">Agrega los dominios donde la extensión puede operar. Escribe uno por línea, sin <code>https://</code> ni <code>www.</code></p>
+    <label for="domains">Dominios permitidos</label>
+    <textarea id="domains" rows="12" placeholder="sdaeducation.com&#10;midominio.cl&#10;otro.com"></textarea>
     <div class="actions">
       <button id="saveBtn">Guardar</button>
-      <button id="resetBtn" class="secondary">Restablecer</button>
+      <button id="resetBtn" class="secondary">Limpiar todo</button>
     </div>
     <p id="msg" class="foot"></p>
+    <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
+    <p class="muted" style="font-size:13px">
+      <strong>Ejemplo:</strong> si tu sitio es <code>www.sdaeducation.com</code>, agrega <code>sdaeducation.com</code> (sin www).
+      La extensión funcionará en ese dominio y todos sus subdominios.
+    </p>
   </main>
-  <script type="module" src="js/options.js"></script>
+  <script src="js/options.js"></script>
 </body>
 </html>
