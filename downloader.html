@@ -1,13 +1,17 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Vimeo Downloader - Conversor MP4</title>
+  <title>Vimeo Downloader - Conversor</title>
+  <style>
+    body { font-family: sans-serif; background: #111; color: #eee; padding: 20px; font-size:14px; }
+    #status { margin-top: 12px; padding: 10px; background: #222; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
+    .ok  { color: #4caf50; }
+    .err { color: #f44336; }
+  </style>
 </head>
 <body>
-  <p style="font-family:sans-serif;color:#999;padding:20px">Convirtiendo a MP4…</p>
-  <!-- mux.js: reempaqueta TS->fMP4 en el navegador sin FFmpeg -->
-  <script src="https://cdn.jsdelivr.net/npm/mux.js@6.3.0/dist/mux.min.js"></script>
+  <div id="status">Esperando datos…</div>
   <script src="downloader.js"></script>
 </body>
 </html>
