@@ -1,42 +1,34 @@
-export const DEFAULTS = { allowedDomains: [] };
-
-export function normalizeDomain(value = '') {
-  return value.trim().toLowerCase()
-    .replace(/^https?:\/\//, '')
-    .replace(/^www\./, '')
-    .replace(/\/$/, '');
-}
-
-export function domainMatches(hostname, allowedDomains = []) {
-  const host = normalizeDomain(hostname);
-  return allowedDomains.some((entry) => {
-    const d = normalizeDomain(entry);
-    return d && (host === d || host.endsWith(`.${d}`));
-  });
-}
-
-export async function getSettings() {
-  const data = await chrome.storage.local.get(DEFAULTS);
-  return { ...DEFAULTS, ...data };
-}
-
-export async function setSettings(settings) {
-  await chrome.storage.local.set(settings);
-}
-
-export function parseVimeoId(url) {
-  if (!url) return null;
-  const patterns = [
-    /player\.vimeo\.com\/video\/(\d+)/i,
-    /vimeo\.com\/(?:video\/)?(\d+)/i
-  ];
-  for (const p of patterns) {
-    const m = url.match(p);
-    if (m) return m[1];
-  }
-  return null;
-}
-
-export function safeFilename(name = 'video') {
-  return name.replace(/[\\\/:\*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim() || 'video';
-}
+// shared.js — sin export/import, se expone como window.VodShared
+(function () {
+  'use strict';
+  window.VodShared = {
+    normalizeDomain: function (value) {
+      return (value || '').trim().toLowerCase()
+        .replace(/^https?:\/\//, '')
+        .replace(/^www\./, '')
+        .replace(/\/$/, '');
+    },
+    domainMatches: function (hostname, allowedDomains) {
+      var host = window.VodShared.normalizeDomain(hostname);
+      return (allowedDomains || []).some(function (entry) {
+        var d = window.VodShared.normalizeDomain(entry);
+        return d && (host === d || host.endsWith('.' + d));
+      });
+    },
+    safeFilename: function (name) {
+      return (name || 'video').replace(/[\\\/:\*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim() || 'video';
+    },
+    parseVimeoId: function (url) {
+      if (!url) return null;
+      var patterns = [
+        /player\.vimeo\.com\/video\/(\d+)/i,
+        /vimeo\.com\/(?:video\/)?(\d+)/i
+      ];
+      for (var i = 0; i < patterns.length; i++) {
+        var m = url.match(patterns[i]);
+        if (m) return m[1];
+      }
+      return null;
+    }
+  };
+})();

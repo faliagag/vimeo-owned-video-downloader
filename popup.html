@@ -9,12 +9,13 @@
 <body>
   <main class="wrap">
     <h1>Descargador Vimeo</h1>
-    <p class="muted">Detecta iframes de Vimeo en la pestaña actual y permite descargar el MP4 progresivo cuando Vimeo lo expone.</p>
+    <p class="muted">Detecta iframes de Vimeo en la pestaña actual.</p>
     <div class="card">
       <div class="row between"><span>Dominio actual</span><strong id="currentDomain">-</strong></div>
       <div class="row between"><span>Estado</span><strong id="status">Cargando&hellip;</strong></div>
       <div class="row between"><span>Videos detectados</span><strong id="count">0</strong></div>
     </div>
+    <button id="addDomainBtn" style="display:none;width:100%;margin:8px 0;"></button>
     <div class="actions">
       <button id="refreshBtn">Actualizar</button>
       <a class="button secondary" href="options.html" target="_blank">Opciones</a>
@@ -22,6 +23,6 @@
     <div id="list" class="list"></div>
     <p class="foot">Úsala solo con contenido propio o autorizado.</p>
   </main>
-  <script type="module" src="js/popup.js"></script>
+  <script src="js/popup.js"></script>
 </body>
 </html>
