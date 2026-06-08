@@ -1,79 +1,40 @@
-/* downloader.js v8.3
- * Recibe el buffer en CHUNKS para evitar RangeError con videos grandes.
- * Array.from() falla con Uint8Array > ~512MB en algunos motores JS.
- * Ahora el background envia el buffer en trozos de 4MB y downloader los reensambla.
+/* downloader.js v9.0
+ * Recibe chunks desde background, ensambla blob y dispara descarga.
  */
 'use strict';
 
-let receivedChunks = [];
-let expectedChunks = 0;
-let pendingMeta = null;
+let meta = null;
+const chunks = [];
 
-chrome.runtime.sendMessage({ type: 'DOWNLOADER_READY' });
-
-chrome.runtime.onMessage.addListener(function(msg) {
-  if (!msg) return;
-
-  // Protocolo nuevo: metadata primero, luego chunks, luego TRIGGER_DOWNLOAD sin buffer
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'DOWNLOAD_META') {
-    pendingMeta = { filename: msg.filename, mime: msg.mime };
-    expectedChunks = msg.totalChunks;
-    receivedChunks = new Array(expectedChunks);
-    return;
+    meta = { filename: msg.filename, mime: msg.mime, totalChunks: msg.totalChunks };
+    chunks.length = 0;
+    sendResponse({ ok: true });
   }
-
-  if (msg.type === 'DOWNLOAD_CHUNK') {
-    // Cada chunk es un array normal (no Uint8Array) para poder viajar por mensajeria
-    receivedChunks[msg.index] = new Uint8Array(msg.data);
-    return;
+  else if (msg.type === 'DOWNLOAD_CHUNK') {
+    chunks[msg.index] = new Uint8Array(msg.data);
+    sendResponse({ ok: true });
   }
-
-  if (msg.type === 'DOWNLOAD_FINALIZE') {
+  else if (msg.type === 'DOWNLOAD_FINALIZE') {
+    if (!meta) { sendResponse({ ok: false }); chrome.runtime.sendMessage({ type:'DOWNLOAD_ERROR', error:'Sin meta.' }); return; }
     try {
-      if (!pendingMeta) throw new Error('Sin metadata');
-      // Calcular total
       let total = 0;
-      for (var i = 0; i < receivedChunks.length; i++) total += receivedChunks[i].length;
+      for (const c of chunks) total += c.length;
       const merged = new Uint8Array(total);
       let offset = 0;
-      for (var j = 0; j < receivedChunks.length; j++) {
-        merged.set(receivedChunks[j], offset);
-        offset += receivedChunks[j].length;
-      }
-      const blob = new Blob([merged], { type: pendingMeta.mime });
+      for (const c of chunks) { merged.set(c, offset); offset += c.length; }
+      const blob = new Blob([merged], { type: meta.mime });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
-      a.href     = url;
-      a.download = pendingMeta.filename;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 5000);
+      a.href = url; a.download = meta.filename; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
       chrome.runtime.sendMessage({ type: 'DOWNLOAD_STARTED' });
+      sendResponse({ ok: true });
     } catch(e) {
       chrome.runtime.sendMessage({ type: 'DOWNLOAD_ERROR', error: e.message });
-    } finally {
-      receivedChunks = [];
-      pendingMeta = null;
-    }
-    return;
-  }
-
-  // Protocolo legado (compatibilidad): buffer completo en un mensaje
-  if (msg.type === 'TRIGGER_DOWNLOAD') {
-    try {
-      const arr  = msg.buffer;
-      const u8   = new Uint8Array(arr);
-      const blob = new Blob([u8], { type: msg.mime });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href     = url;
-      a.download = msg.filename;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 5000);
-      chrome.runtime.sendMessage({ type: 'DOWNLOAD_STARTED' });
-    } catch(e) {
-      chrome.runtime.sendMessage({ type: 'DOWNLOAD_ERROR', error: e.message });
+      sendResponse({ ok: false, error: e.message });
     }
   }
+  return true;
 });

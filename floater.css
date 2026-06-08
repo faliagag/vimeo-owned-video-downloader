@@ -1,100 +1,22 @@
-/* floater.css v8.3 - todos los estilos del floater aqui, sin inline styles */
-#__vdf_wrap__ {
+.vdf-floater {
   position: fixed;
   bottom: 20px;
   right: 20px;
   z-index: 2147483647;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-width: 340px;
-  width: 340px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  pointer-events: none;
-}
-
-.vdf-card {
-  background: rgba(15,18,28,0.97);
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 12px;
-  padding: 14px 16px;
-  pointer-events: all;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-  transition: opacity 0.4s ease;
-}
-
-.vdf-card.vdf-fadeout {
-  opacity: 0;
-}
-
-.vdf-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.vdf-icon {
-  color: #4fc3f7;
-  font-size: 14px;
-  flex-shrink: 0;
-}
-
-.vdf-title {
-  color: #fff;
+  background: #1a1d27;
+  border: 1px solid #2a2d3a;
+  border-radius: 10px;
+  padding: 12px 16px;
+  min-width: 240px;
+  max-width: 320px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+  font-family: system-ui, -apple-system, sans-serif;
   font-size: 13px;
-  font-weight: 600;
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: #d1d5db;
+  animation: vdf-in .2s ease;
 }
-
-.vdf-close {
-  background: none;
-  border: none;
-  color: rgba(255,255,255,0.4);
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  padding: 0 0 0 8px;
-  flex-shrink: 0;
-}
-.vdf-close:hover { color: rgba(255,255,255,0.8); }
-
-.vdf-bar-wrap {
-  background: rgba(255,255,255,0.08);
-  border-radius: 6px;
-  height: 5px;
-  overflow: hidden;
-  margin-bottom: 8px;
-}
-
-.vdf-bar {
-  height: 100%;
-  width: 0%;
-  background: linear-gradient(90deg, #1976d2, #4fc3f7);
-  border-radius: 6px;
-  transition: width 0.4s ease;
-}
-
-.vdf-card.vdf-done .vdf-bar {
-  background: linear-gradient(90deg, #2e7d32, #66bb6a);
-}
-
-.vdf-card.vdf-error .vdf-bar {
-  background: #c62828;
-}
-
-.vdf-status {
-  color: rgba(255,255,255,0.55);
-  font-size: 11px;
-}
-
-.vdf-card.vdf-done .vdf-status {
-  color: #66bb6a;
-}
-
-.vdf-card.vdf-error .vdf-status {
-  color: #ef9a9a;
-}
+@keyframes vdf-in { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+.vdf-title { font-weight: 700; color: #1ab7ea; margin-bottom: 4px; font-size: 12px; }
+.vdf-msg { color: #94a3b8; font-size: 12px; margin-bottom: 8px; min-height: 16px; }
+.vdf-bar-wrap { background: #0f1117; border-radius: 999px; height: 5px; overflow: hidden; }
+.vdf-bar { height: 100%; background: linear-gradient(90deg,#1ab7ea,#0ea5e9); border-radius: 999px; transition: width .3s ease; }

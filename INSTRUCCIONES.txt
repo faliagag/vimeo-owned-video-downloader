@@ -1,33 +1,45 @@
-Vimeo Owned Video Downloader v8.3
+VIMEO OWNED VIDEO DOWNLOADER v9.0
 ==================================
 
-INSTALACIÓN:
-1. Descomprime / clona la carpeta del proyecto
-2. Abre Chrome y ve a: chrome://extensions/
-3. Activa "Modo desarrollador" (interruptor arriba a la derecha)
-4. Haz clic en "Cargar sin empaquetar"
-5. Selecciona la carpeta que contiene el manifest.json
+INSTALACIÓN
+-----------
+1. Descarga el ZIP del repositorio
+2. Descomprime en una carpeta
+3. Abre Chrome → chrome://extensions/
+4. Activa "Modo desarrollador" (arriba a la derecha)
+5. Clic en "Cargar descomprimida" → selecciona la carpeta
 
-PRIMER USO:
-1. Abre tu sitio web que tiene los iframes de Vimeo
-2. Haz clic en el icono de la extensión (puzzle > Vimeo Owned Downloader)
-3. En el campo "Dominio permitido" escribe tu dominio (ej: www.tusitio.com)
-4. Haz clic en Guardar
-5. La extensión escaneara automaticamente los videos en la pagina
-6. Haz clic en el boton Descargar del video que quieras
-7. Puedes cerrar el popup - la descarga continua en segundo plano
+USO
+---
+1. Abre tu sitio que tiene los videos Vimeo embebidos
+2. Haz clic en el ícono de la extensión
+3. Escribe tu dominio (ej: misitio.cl) y haz clic en Guardar
+4. La extensión detecta automáticamente los iframes con 4 reintentos
+5. Cada video muestra un botón "⬇ Descargar"
 
-FORMAT DE SALIDA:
-- MP4: cuando Vimeo expone archivos progresivos (mejor calidad)
-- .TS: cuando solo hay HLS disponible (abrir con VLC o convertir con ffmpeg)
+ESTRATEGIAS DE EXTRACCIÓN (sin API key)
+---------------------------------------
+1. playerConfig desde el iframe cargado (world:MAIN)
+2. Interceptor de JSON.parse en player.vimeo.com
+3. Endpoint público config.js de Vimeo
+4. oEmbed de Vimeo (metadata)
+5. Regex sobre el HTML completo de la página
+6. MutationObserver para iframes dinámicos
+7. Timers diferidos (1.5s, 4s) para lazy loading
 
-ACTUALIZAR LA EXTENSIÓN:
-1. Descarga el ZIP desde GitHub
-2. Elimina la extensión antigua en chrome://extensions/
-3. Carga la nueva carpeta con "Cargar sin empaquetar"
-4. Cierra y reabre la pestaña de tu sitio
+FORMATOS DE DESCARGA
+--------------------
+- MP4 progresivo (calidad HD cuando disponible)
+- MP4 de enlace download directo
+- HLS → .ts ensamblado localmente
 
-PROBLEMAS COMUNES:
-- "Sin playerConfig": el iframe puede ser cross-origin con Vimeo private. Intenta el botón Diagnóstico.
-- Error CSP: asegurate de usar los archivos v8.3 completos (no mezclar versiones)
-- Duplicados: siempre elimina la extensión anterior antes de cargar la nueva
+DIAGNÓSTICO
+-----------
+- Botón "🔍 Diagnóstico" → muestra fuente, formato y candidatos
+- Botón "⚙ Config" → detalle completo de todos los candidatos
+- Log de actividad en el panel inferior
+
+NOTA LEGAL
+----------
+Esta extensión es para uso exclusivo con videos sobre los que
+el usuario tiene propiedad intelectual o autorización de descarga.
