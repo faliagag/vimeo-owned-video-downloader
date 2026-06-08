@@ -1,43 +1,49 @@
 {
   "manifest_version": 3,
-  "name": "__MSG_extName__",
-  "description": "__MSG_extDes__",
-  "version": "2.1.1",
-  "default_locale": "es",
-  "action": {
-    "default_title": "__MSG_extName__",
-    "default_popup": "popup.html"
+  "name": "Vimeo Video Downloader",
+  "version": "1.0.0",
+  "description": "Download Vimeo videos you own or have access to",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   },
-  "options_page": "options.html",
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_popup": "popup.html",
+    "default_title": "Vimeo Video Downloader"
+  },
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["storage", "downloads", "tabs", "scripting", "activeTab", "offscreen"],
-  "host_permissions": [
-    "https://*.vimeo.com/*",
-    "https://player.vimeo.com/*",
-    "http://*/*",
-    "https://*/*"
-  ],
   "content_scripts": [
     {
-      "matches": ["https://player.vimeo.com/*", "https://vimeo.com/*"],
-      "js": ["interceptor.js"],
+      "matches": ["*://*.vimeo.com/*", "*://*/*"],
+      "js": ["content-inject.js"],
       "run_at": "document_start",
-      "world": "MAIN",
       "all_frames": true
     },
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content.js"],
-      "run_at": "document_idle",
+      "matches": ["*://*.vimeo.com/*", "*://*/*"],
+      "js": ["content-main.js"],
+      "run_at": "document_end",
       "all_frames": true
     }
   ],
-  "icons": {
-    "16": "icons/icon16.png",
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  }
+  "permissions": [
+    "tabs",
+    "storage",
+    "downloads"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*", "ajax-listener.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
