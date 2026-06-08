@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "__MSG_extName__",
   "description": "__MSG_extDes__",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "default_locale": "es",
   "action": {
     "default_title": "__MSG_extName__",
@@ -10,10 +10,9 @@
   },
   "options_page": "options.html",
   "background": {
-    "service_worker": "js/background.js",
-    "type": "module"
+    "service_worker": "background.js"
   },
-  "permissions": ["storage", "downloads", "tabs", "scripting", "activeTab"],
+  "permissions": ["storage", "downloads", "tabs", "scripting", "activeTab", "offscreen"],
   "host_permissions": [
     "https://*.vimeo.com/*",
     "https://player.vimeo.com/*",
@@ -22,8 +21,15 @@
   ],
   "content_scripts": [
     {
+      "matches": ["https://player.vimeo.com/*", "https://vimeo.com/*"],
+      "js": ["interceptor.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["js/content.js"],
+      "js": ["content.js"],
       "run_at": "document_idle",
       "all_frames": true
     }
