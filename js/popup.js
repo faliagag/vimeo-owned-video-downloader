@@ -45,76 +45,59 @@ function renderItem(item, allowed) {
   return el;
 }
 
-async function injectContentScript(tabId) {
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      files: ['js/content.js']
-    });
-    await chrome.scripting.insertCSS({
-      target: { tabId, allFrames: true },
-      files: ['css/content.css']
-    });
-  } catch (_) {
-    // La URL puede ser chrome:// u otro origen bloqueado, se ignora
-  }
+async function injectAndScan(tabId) {
+  // Inyectar como script clásico (no module) para compatibilidad total
+  await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    files: ['js/content.js']
+  });
+  await new Promise((r) => setTimeout(r, 300));
+  return chrome.tabs.sendMessage(tabId, { type: 'SCAN_PAGE' });
 }
 
 async function load() {
   const statusEl = $('#status');
   statusEl.textContent = 'Leyendo pesta\u00f1a\u2026';
 
-  // Obtener la pestaña activa directamente en el popup
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-  if (!tab?.id) {
-    statusEl.textContent = 'Sin pesta\u00f1a activa';
-    return;
-  }
+  if (!tab?.id) { statusEl.textContent = 'Sin pesta\u00f1a activa'; return; }
 
   const url = tab.url || '';
-  if (url.startsWith('chrome://') || url.startsWith('chrome-extension://') || url.startsWith('about:') || url.startsWith('edge://')) {
-    $('#currentDomain').textContent = new URL(url).hostname || url.split('/')[2] || '-';
+  if (/^(chrome|edge|about|chrome-extension):/.test(url)) {
+    $('#currentDomain').textContent = '-';
     statusEl.textContent = '\u26d4 URL no compatible';
-    $('#list').innerHTML = '<div class="item"><p>Chrome no permite que las extensiones accedan a p\u00e1ginas del sistema (<code>chrome://</code>). Navega a una p\u00e1gina web normal.</p></div>';
+    $('#list').innerHTML = '<div class="item"><p>Navega a una p\u00e1gina web normal (http/https) y vuelve a abrir la extensi\u00f3n.</p></div>';
     return;
   }
 
   try {
-    const hostname = new URL(url).hostname;
-    $('#currentDomain').textContent = hostname;
+    $('#currentDomain').textContent = new URL(url).hostname;
+  } catch (_) {}
 
-    // Intentar escanear; si falla, inyectar primero y reintentar
-    let res;
+  let res;
+  // Intento 1: el content script ya está activo
+  try {
+    res = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_PAGE' });
+  } catch (_) {
+    // Intento 2: inyectar y reintentar
     try {
-      res = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_PAGE' });
-    } catch (_) {
-      // Content script no estaba activo — inyectarlo ahora
-      await injectContentScript(tab.id);
-      // Esperar un momento para que se inicialice
-      await new Promise((r) => setTimeout(r, 300));
-      try {
-        res = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_PAGE' });
-      } catch (e2) {
-        statusEl.textContent = 'Error al inyectar script';
-        $('#list').innerHTML = `<div class="item"><p>No se pudo acceder a la p\u00e1gina: ${e2.message}<br><br>Intenta <strong>recargar la p\u00e1gina</strong> y vuelve a abrir la extensi\u00f3n.</p></div>`;
-        return;
-      }
-    }
-
-    statusEl.textContent = res.allowed ? '\u2705 Autorizado' : '\u26d4 No autorizado';
-    $('#count').textContent = String(res.items.length);
-    const list = $('#list');
-    list.innerHTML = '';
-    if (!res.items.length) {
-      list.innerHTML = '<div class="item"><p>No se detectaron iframes o enlaces Vimeo en esta p\u00e1gina.</p></div>';
+      res = await injectAndScan(tab.id);
+    } catch (e2) {
+      statusEl.textContent = 'Error';
+      $('#list').innerHTML = `<div class="item"><p>⚠️ No se pudo acceder a la p\u00e1gina.<br><br><strong>Recarga la p\u00e1gina</strong> (F5) y vuelve a abrir la extensi\u00f3n.</p></div>`;
       return;
     }
-    res.items.forEach((item) => list.appendChild(renderItem(item, res.allowed)));
-  } catch (e) {
-    statusEl.textContent = 'Error';
-    $('#list').innerHTML = `<div class="item"><p>${e.message}</p></div>`;
   }
+
+  statusEl.textContent = res.allowed ? '\u2705 Autorizado' : '\u26d4 No autorizado (agrega el dominio en Opciones)';
+  $('#count').textContent = String(res.items.length);
+  const list = $('#list');
+  list.innerHTML = '';
+  if (!res.items.length) {
+    list.innerHTML = '<div class="item"><p>No se detectaron iframes de Vimeo en esta p\u00e1gina.</p></div>';
+    return;
+  }
+  res.items.forEach((item) => list.appendChild(renderItem(item, res.allowed)));
 }
 
 document.getElementById('refreshBtn').addEventListener('click', load);
