@@ -1,54 +1,27 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Vimeo Downloader</title>
-  <link rel="stylesheet" href="popup.css">
+  <title>Descargador Vimeo propio</title>
+  <link rel="stylesheet" href="css/ui.css">
 </head>
 <body>
-  <div class="header">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="#1ab7ea"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
-    <span>Vimeo Downloader <small>v9.5</small></span>
-    <button id="refresh" title="Reescanear">↺</button>
-  </div>
-
-  <div class="section">
-    <label>Dominio permitido</label>
-    <div class="row">
-      <input id="allowedHost" type="text" placeholder="ej: misitio.cl" />
-      <button id="saveHost">Guardar</button>
+  <main class="wrap">
+    <h1>Descargador Vimeo</h1>
+    <p class="muted">Detecta iframes de Vimeo en la pestaña actual y permite descargar el MP4 progresivo cuando Vimeo lo expone.</p>
+    <div class="card">
+      <div class="row between"><span>Dominio actual</span><strong id="currentDomain">-</strong></div>
+      <div class="row between"><span>Estado</span><strong id="status">Cargando&hellip;</strong></div>
+      <div class="row between"><span>Videos detectados</span><strong id="count">0</strong></div>
     </div>
-    <div id="hostInfo" class="hint"></div>
-  </div>
-
-  <div id="status" class="status">Iniciando…</div>
-  <div id="videos"></div>
-
-  <!-- BOOKMARKLET ───────────────────────────────── -->
-  <details id="bookmarklet-section">
-    <summary>🔖 Bookmarklet — extraer config manual</summary>
-    <div class="bm-body">
-      <p class="hint">Arrastra el botón a tu barra de marcadores. Úsalo en una página de Vimeo o tu sitio para copiar el playerConfig al portapapeles y luego pégalo en el log de diagnóstico.</p>
-      <div class="bm-row">
-        <!-- Enlace arrastrable -->
-        <a id="bm-drag"
-           class="bm-link"
-           title="Arrastra esto a tu barra de marcadores">
-          🔖 Copiar Config Vimeo
-        </a>
-        <button id="bm-copy" class="small">Copiar código</button>
-      </div>
-      <textarea id="bm-code" class="bm-code" readonly spellcheck="false"></textarea>
+    <div class="actions">
+      <button id="refreshBtn">Actualizar</button>
+      <a class="button secondary" href="options.html" target="_blank">Opciones</a>
     </div>
-  </details>
-
-  <details>
-    <summary>📋 Log de actividad</summary>
-    <div id="log" class="log">Sin actividad.</div>
-    <button id="clearLog" class="small">Limpiar log</button>
-  </details>
-
-  <script src="popup.js"></script>
+    <div id="list" class="list"></div>
+    <p class="foot">Úsala solo con contenido propio o autorizado.</p>
+  </main>
+  <script type="module" src="js/popup.js"></script>
 </body>
 </html>

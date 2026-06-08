@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Opciones</title>
+  <link rel="stylesheet" href="css/ui.css">
+</head>
+<body>
+  <main class="wrap narrow">
+    <h1>Opciones</h1>
+    <p class="muted">Define los dominios donde la extensión puede operar.</p>
+    <label for="domains">Dominios permitidos (uno por línea)</label>
+    <textarea id="domains" rows="12" placeholder="midominio.cl&#10;www.midominio.cl"></textarea>
+    <div class="actions">
+      <button id="saveBtn">Guardar</button>
+      <button id="resetBtn" class="secondary">Restablecer</button>
+    </div>
+    <p id="msg" class="foot"></p>
+  </main>
+  <script type="module" src="js/options.js"></script>
+</body>
+</html>

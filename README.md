@@ -1,48 +1,52 @@
-# Vimeo Owned Video Downloader v8.3
+# Descargador Vimeo Propio — Extensión Chrome (MV3)
 
-Extensión Chrome MV3 para descargar videos **propios** alojados en Vimeo e integrados como iframes en tu sitio web.
+Extensión para detectar videos de **Vimeo embebidos** en sitios autorizados (tuyos o con permiso) y descargar el archivo MP4 progresivo cuando Vimeo lo expone.
 
-## Características
+## Estructura
 
-- ✅ Detecta iframes `player.vimeo.com` automáticamente
-- ✅ Descarga MP4 directa cuando el player expone archivos progresivos
-- ✅ Conversión HLS → `.ts` para videos con solo stream adaptativo
-- ✅ Barra flotante persistente con progreso (se puede cerrar el popup)
-- ✅ Sin duplicados de tarjetas ni de descargas
-- ✅ Sin violaciones CSP (`unsafe-inline`) — todos los estilos en archivos externos
-- ✅ Sin `RangeError` — buffer enviado en chunks de 4 MB
-- ✅ Restringido al dominio que configures
+```
+vimeo-owned-video-downloader/
+├── manifest.json
+├── popup.html
+├── options.html
+├── _locales/
+│   ├── es/messages.json
+│   └── en/messages.json
+├── css/
+│   ├── ui.css
+│   └── content.css
+├── js/
+│   ├── shared.js
+│   ├── background.js
+│   ├── content.js
+│   ├── popup.js
+│   └── options.js
+└── icons/
+    ├── icon16.png
+    ├── icon32.png
+    ├── icon48.png
+    └── icon128.png
+```
 
-## Instalación
+## Instalación local
 
-1. Descarga o clona el repositorio
-2. Abre `chrome://extensions/`
-3. Activa **Modo desarrollador** (esquina superior derecha)
-4. Haz clic en **Cargar sin empaquetar** y selecciona la carpeta
+1. Descarga o clona este repositorio.
+2. Abre Chrome y ve a `chrome://extensions`.
+3. Activa el **Modo desarrollador** (esquina superior derecha).
+4. Haz clic en **"Cargar descomprimida"** y selecciona la carpeta del proyecto.
+5. Abre la extensión → **Opciones** y agrega tus dominios autorizados (ej. `midominio.cl`).
+6. Navega a una página de tu sitio con un iframe de Vimeo → el popup detectará el video.
 
 ## Uso
 
-1. Abre una página de tu sitio que contenga iframes de Vimeo
-2. Haz clic en el ícono de la extensión
-3. En **Dominio permitido**, ingresa tu dominio (ej: `www.tudominio.com`) y guarda
-4. La extensión escanea automáticamente los iframes
-5. Haz clic en **⬇ Descargar** en el video deseado
-6. Puedes cerrar el popup — la descarga continúa
+- El **popup** detecta iframes y enlaces Vimeo en la pestaña activa.
+- Si el dominio está autorizado en Opciones, aparece el botón **"Ver descargas"**.
+- La extensión consulta `player.vimeo.com/video/{id}/config` para listar calidades MP4 progresivas disponibles.
+- Se descarga el archivo usando la API `chrome.downloads`.
 
-## Archivos
+## Notas importantes
 
-| Archivo | Función |
-|---|---|
-| `manifest.json` | Configuración MV3 |
-| `background.js` | Service worker: lógica principal, HLS download |
-| `popup.html/css/js` | Interfaz del popup |
-| `floater.js/css` | Barra flotante en la página |
-| `downloader.html/js` | Tab auxiliar para disparar Blob downloads |
-| `page_scanner.js` | Detecta iframes y accede al playerConfig |
-| `vimeo_interceptor.js` | Intercepta playerConfig dentro del iframe Vimeo |
-
-## Notas
-
-- Solo funciona con videos a los que tienes acceso como propietario o con permisos de descarga habilitados en Vimeo
-- Videos con DRM no son descargables por este método
-- El archivo `.ts` generado de HLS es compatible con VLC y ffmpeg
+- **Solo funciona con videos que Vimeo expone como MP4 progresivo** (generalmente videos propios o en planes que permiten descarga).
+- **Úsala exclusivamente con contenido propio o autorizado.**
+- La validación por dominio es una capa de control adicional para restringir el uso.
+- Versión: 2.0.0 — Arquitectura limpia MV3 con ES Modules.

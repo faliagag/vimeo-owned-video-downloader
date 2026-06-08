@@ -1,0 +1,14 @@
+.vod-owner-chip {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2147483647;
+  background: rgba(11, 107, 112, .92);
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font: 600 12px/1 system-ui, sans-serif;
+  box-shadow: 0 2px 10px rgba(0,0,0,.18);
+  pointer-events: none;
+}
+.vod-owner-wrap { position: relative; }

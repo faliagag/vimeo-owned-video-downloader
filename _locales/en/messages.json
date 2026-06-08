@@ -1,0 +1,4 @@
+{
+  "extName": {"message": "Own Vimeo Downloader"},
+  "extDes": {"message": "Extension to detect Vimeo embedded videos on authorized sites and download progressive MP4 files when available for owned or authorized content."}
+}
