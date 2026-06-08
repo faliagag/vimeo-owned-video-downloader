@@ -1,25 +1,43 @@
-/* vimeo_frame.js v9.0
- * Escucha postMessages del interceptor y los almacena en window.__vimeoInterceptedConfigs
- * Se inyecta en la página principal (no en el iframe)
+/* vimeo_frame.js v9.3
+ * Se inyecta via scripting en ALL frames de la pagina activa (incluidos iframes de Vimeo)
+ * Intenta leer el playerConfig desde variables globales del frame y enviarlo al background
  */
-'use strict';
 (function () {
-  if (window.__VIMEO_FRAME_LISTENER_V90__) return;
-  window.__VIMEO_FRAME_LISTENER_V90__ = true;
+  'use strict';
+  if (window.location.hostname !== 'player.vimeo.com') return;
+  if (window.__vimeoFrameReaderV93) return;
+  window.__vimeoFrameReaderV93 = true;
 
-  if (!window.__vimeoInterceptedConfigs) window.__vimeoInterceptedConfigs = {};
+  function extractVideoId() {
+    try { const m = location.pathname.match(/\/video\/(\d+)/); return m ? m[1] : null; } catch (_) { return null; }
+  }
 
-  window.addEventListener('message', function (ev) {
+  function tryGetConfig() {
+    const candidates = ['playerConfig', '__playerConfig', 'config'];
+    for (const k of candidates) {
+      try { const v = window[k]; if (v && v.request && v.request.files) return v; } catch (_) {}
+    }
     try {
-      const d = ev.data;
-      if (!d || !d.__vimeoExtConfig) return;
-      const vid = String(d.videoId || '');
-      if (!vid) return;
-      window.__vimeoInterceptedConfigs[vid] = d.config;
-      // Disparar re-escaneo
-      if (typeof window.__scanVimeoEmbedsNow === 'function') {
-        window.__scanVimeoEmbedsNow();
+      for (const k of Object.keys(window)) {
+        const v = window[k];
+        if (v && typeof v === 'object' && v.request && v.request.files && v.video) return v;
       }
-    } catch(_) {}
-  });
+    } catch (_) {}
+    return null;
+  }
+
+  const cfg = tryGetConfig();
+  if (cfg) {
+    const videoId = extractVideoId() || String(cfg.video?.id || '');
+    window.__VIMEO_CAPTURED_CONFIG__ = window.__VIMEO_CAPTURED_CONFIG__ || {};
+    window.__VIMEO_CAPTURED_CONFIG__[videoId] = cfg;
+    try {
+      window.top.postMessage({ __vimeoExt: true, type: 'VIMEO_CONFIG_CAPTURED', videoId, config: cfg }, '*');
+    } catch (_) {}
+    try {
+      chrome.runtime.sendMessage({ type: '__VIMEO_CONFIG_FROM_FRAME__', videoId, config: cfg }).catch(() => {});
+    } catch (_) {}
+  }
+
+  return cfg;
 })();

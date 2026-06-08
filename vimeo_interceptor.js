@@ -1,57 +1,133 @@
-/* vimeo_interceptor.js v9.0
- * Corre en world:MAIN dentro de player.vimeo.com
- * Captura playerConfig interceptando JSON.parse y window.playerConfig
- * Luego lo comunica al padre vía postMessage
+/* vimeo_interceptor.js v9.3
+ * Corre en world:MAIN dentro de player.vimeo.com (all_frames:true)
+ * Intercepta XHR y fetch para capturar el playerConfig antes de que Vimeo lo procese.
+ * Expone el resultado en window.__VIMEO_CAPTURED_CONFIG__ y lo envia al background.
  */
-'use strict';
 (function () {
-  if (window.__VIMEO_INTERCEPTOR_V90__) return;
-  window.__VIMEO_INTERCEPTOR_V90__ = true;
+  'use strict';
+  if (window.__vimeoInterceptorV93) return;
+  window.__vimeoInterceptorV93 = true;
 
-  function broadcast(cfg) {
-    if (!cfg || !cfg.video || !cfg.request) return;
-    const vid = String(cfg.video.id || cfg.video.clip_id || '');
-    if (!vid) return;
+  function extractVideoId() {
     try {
-      window.top.postMessage({ __vimeoExtConfig: true, videoId: vid, config: cfg }, '*');
-    } catch(_) {
-      try { window.parent.postMessage({ __vimeoExtConfig: true, videoId: vid, config: cfg }, '*'); } catch(_) {}
-    }
+      const m = location.pathname.match(/\/video\/(\d+)/);
+      return m ? m[1] : null;
+    } catch (_) { return null; }
   }
 
-  // Interceptar JSON.parse para capturar el momento en que se parsea playerConfig
-  const origParse = JSON.parse;
-  JSON.parse = function(text) {
-    const result = origParse.apply(this, arguments);
+  function isConfigUrl(url) {
+    return typeof url === 'string' && /player\.vimeo\.com\/video\/\d+\/config/.test(url);
+  }
+
+  function tryParseConfig(text) {
     try {
-      if (result && result.request && result.video && result.request.files) {
-        broadcast(result);
+      const j = JSON.parse(text);
+      if (j && j.request && j.request.files) return j;
+    } catch (_) {}
+    return null;
+  }
+
+  function broadcast(config) {
+    const videoId = extractVideoId() || (config && config.video && String(config.video.id)) || '';
+    window.__VIMEO_CAPTURED_CONFIG__ = window.__VIMEO_CAPTURED_CONFIG__ || {};
+    window.__VIMEO_CAPTURED_CONFIG__[videoId] = config;
+    // Enviar al background via chrome.runtime si esta disponible
+    try {
+      chrome.runtime.sendMessage({
+        type: '__VIMEO_CONFIG_FROM_FRAME__',
+        videoId: videoId,
+        config: config
+      }).catch(() => {});
+    } catch (_) {}
+    // Tambien disparar un CustomEvent para que page_scanner.js lo lea desde la pagina padre
+    try {
+      window.top.postMessage({
+        __vimeoExt: true,
+        type: 'VIMEO_CONFIG_CAPTURED',
+        videoId: videoId,
+        config: config
+      }, '*');
+    } catch (_) {}
+  }
+
+  /* --- Interceptar XMLHttpRequest --- */
+  const OrigXHR = window.XMLHttpRequest;
+  function PatchedXHR() {
+    const xhr = new OrigXHR();
+    let _url = '';
+    const origOpen = xhr.open.bind(xhr);
+    const origSend = xhr.send.bind(xhr);
+    xhr.open = function (method, url, ...rest) {
+      _url = url || '';
+      return origOpen(method, url, ...rest);
+    };
+    xhr.send = function (...args) {
+      if (isConfigUrl(_url)) {
+        xhr.addEventListener('load', function () {
+          try {
+            const cfg = tryParseConfig(xhr.responseText);
+            if (cfg) broadcast(cfg);
+          } catch (_) {}
+        }, { once: true });
       }
-    } catch(_) {}
-    return result;
+      return origSend(...args);
+    };
+    // Proxy para que el codigo de Vimeo pueda seguir accediendo a propiedades normalmente
+    return new Proxy(xhr, {
+      get(t, p) { const v = t[p]; return typeof v === 'function' ? v.bind(t) : v; },
+      set(t, p, v) { try { t[p] = v; } catch (_) {} return true; }
+    });
+  }
+  PatchedXHR.prototype = OrigXHR.prototype;
+  try { window.XMLHttpRequest = PatchedXHR; } catch (_) {}
+
+  /* --- Interceptar fetch --- */
+  const origFetch = window.fetch;
+  window.fetch = async function (input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const response = await origFetch.call(this, input, init);
+    if (isConfigUrl(url)) {
+      try {
+        const clone = response.clone();
+        clone.text().then(text => {
+          const cfg = tryParseConfig(text);
+          if (cfg) broadcast(cfg);
+        }).catch(() => {});
+      } catch (_) {}
+    }
+    return response;
   };
 
-  // Interceptar asignación de window.playerConfig
-  try {
-    let _cfg = window.playerConfig;
-    Object.defineProperty(window, 'playerConfig', {
-      get() { return _cfg; },
-      set(v) { _cfg = v; broadcast(v); },
-      configurable: true
-    });
-  } catch(_) {}
-
-  // Chequeo diferido por si ya estaba asignado
-  setTimeout(() => {
-    try {
-      if (window.playerConfig) broadcast(window.playerConfig);
-    } catch(_) {}
-    // Buscar en todas las variables globales
-    for (const k of Object.keys(window)) {
+  /* --- Leer config si ya fue cargado como variable global --- */
+  function tryReadGlobal() {
+    const candidates = ['playerConfig', '__playerConfig', 'config', 'vimeoPlayerConfig'];
+    for (const k of candidates) {
       try {
         const v = window[k];
-        if (v && typeof v === 'object' && v.request?.files && v.video?.id) broadcast(v);
-      } catch(_) {}
+        if (v && v.request && v.request.files && v.video && v.video.id) {
+          broadcast(v);
+          return true;
+        }
+      } catch (_) {}
     }
-  }, 800);
+    // Busqueda profunda solo en el scope global de primero nivel
+    try {
+      for (const k of Object.keys(window)) {
+        const v = window[k];
+        if (v && typeof v === 'object' && v.request && v.request.files && v.video && v.video.id) {
+          broadcast(v);
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  // Intentar inmediatamente y luego en distintos momentos del ciclo de vida
+  tryReadGlobal();
+  document.addEventListener('DOMContentLoaded', tryReadGlobal, { once: true });
+  window.addEventListener('load', tryReadGlobal, { once: true });
+  setTimeout(tryReadGlobal, 500);
+  setTimeout(tryReadGlobal, 1500);
+  setTimeout(tryReadGlobal, 3000);
 })();
