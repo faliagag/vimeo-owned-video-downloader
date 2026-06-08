@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Vimeo Owned Video Downloader",
-  "version": "9.8.0",
+  "version": "9.8.1",
   "description": "Descarga tus videos Vimeo embebidos en MP4. Usa cookies de sesión Vimeo automáticamente.",
   "permissions": ["activeTab", "scripting", "downloads", "storage", "tabs", "cookies", "offscreen"],
   "host_permissions": ["<all_urls>"],
   "content_security_policy": {
-    "extension_pages": "default-src 'self' blob:; connect-src https://* http://* blob:; script-src 'self' blob: 'wasm-unsafe-eval'; worker-src blob:;"
+    "extension_pages": "default-src 'self'; connect-src https://* http://*; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self';"
   },
   "action": {
     "default_title": "Vimeo Downloader",
@@ -21,8 +21,7 @@
   }],
   "content_scripts": [
     {
-      "matches": ["https://*/*", "http://*/*"],
-      "js": ["page_scanner.js"],
+      "matches": ["https://*/*", "js": ["page_scanner.js"],
       "run_at": "document_idle",
       "all_frames": false,
       "world": "MAIN"
