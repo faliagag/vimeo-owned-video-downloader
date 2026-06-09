@@ -1,49 +1,52 @@
 {
   "manifest_version": 3,
   "name": "Vimeo Video Downloader",
-  "version": "1.0.0",
-  "description": "Download Vimeo videos you own or have access to",
+  "version": "2.0.0",
+  "description": "Descarga videos de Vimeo con detección automática de calidades",
+  "default_locale": "en",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
   "action": {
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     },
-    "default_popup": "popup.html",
-    "default_title": "Vimeo Video Downloader"
+    "default_title": "Vimeo Downloader"
   },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "*://*.vimeo.com/*",
+    "*://*.vimeocdn.com/*"
+  ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "js/background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
-      "matches": ["*://*.vimeo.com/*", "*://*/*"],
-      "js": ["content-inject.js"],
+      "matches": [
+        "*://*.vimeo.com/*",
+        "*://*/*"
+      ],
+      "js": ["js/content.js"],
       "run_at": "document_start",
-      "all_frames": true
-    },
-    {
-      "matches": ["*://*.vimeo.com/*", "*://*/*"],
-      "js": ["content-main.js"],
-      "run_at": "document_end",
       "all_frames": true
     }
   ],
-  "permissions": [
-    "tabs",
-    "storage",
-    "downloads"
-  ],
-  "host_permissions": ["<all_urls>"],
   "web_accessible_resources": [
     {
-      "resources": ["icons/*", "ajax-listener.js"],
-      "matches": ["<all_urls>"]
+      "resources": ["js/inject.js"],
+      "matches": ["*://*.vimeo.com/*", "*://*/*"]
     }
   ]
 }

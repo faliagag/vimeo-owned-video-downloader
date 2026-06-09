@@ -1,127 +1,142 @@
-(function () {
+// popup.js
+(async function () {
   'use strict';
 
-  var currentTabUrl = '';
+  const body = document.getElementById('body');
+  const toast = document.getElementById('toast');
 
-  function normalizeDomain(v) {
-    return (v || '').trim().toLowerCase()
-      .replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '');
+  function showToast(msg, color = '#27ae60') {
+    toast.textContent = msg;
+    toast.style.background = color;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2500);
   }
 
-  function $(s) { return document.querySelector(s); }
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
 
-  function renderItem(item, allowed) {
-    var el = document.createElement('section');
-    el.className = 'item';
-    el.innerHTML =
-      '<div class="badge">Video ' + item.videoId + '</div>' +
-      '<h3>' + (item.titleHint || 'Video detectado') + '</h3>' +
-      '<p style="word-break:break-all;font-size:12px;color:var(--muted)">' + item.sourceUrl + '</p>' +
-      '<div class="actions"><button data-action="fetch" ' + (allowed ? '' : 'disabled title="Autoriza el dominio primero"') + '>Ver descargas</button></div>' +
-      '<div class="downloads"></div>';
+  function renderEmpty(msg = 'No se detectaron videos de Vimeo.') {
+    body.innerHTML = `
+      <div class="state-empty">
+        <div class="icon">🎬</div>
+        <p>${esc(msg)}</p>
+        <p class="hint">Navega a una página con un video de Vimeo,<br>espera que cargue y pulsa Reescanear.</p>
+      </div>
+      <div class="actions">
+        <button class="btn-action" id="btn-reload">🔄 Reescanear</button>
+      </div>
+    `;
+    document.getElementById('btn-reload')?.addEventListener('click', triggerRescan);
+  }
 
-    el.querySelector('[data-action="fetch"]').addEventListener('click', async function () {
-      var box = el.querySelector('.downloads');
-      box.innerHTML = '<p class="small">Consultando Vimeo&hellip;</p>';
-      try {
-        // CLAVE: pasar currentTabUrl como pageUrl para que background pueda validar el dominio
-        var res = await chrome.runtime.sendMessage({
-          type: 'GET_VIMEO_DOWNLOADS',
-          videoId: item.videoId,
-          pageUrl: currentTabUrl
-        });
-        if (!res.ok) { box.innerHTML = '<p class="small">⚠️ ' + res.error + '</p>'; return; }
-        box.innerHTML = '';
-        if (!res.files || !res.files.length) {
-          box.innerHTML = '<p class="small">⚠️ Vimeo no expone MP4 descargables para este video.</p>';
-          return;
-        }
-        res.files.forEach(function (file) {
-          var row = document.createElement('div');
-          row.className = 'row between'; row.style.marginTop = '8px';
-          var label = document.createElement('span'); label.className = 'small';
-          label.textContent = (file.quality || 'MP4') + (file.width ? ' · ' + file.width + 'x' + file.height : '');
-          var btn = document.createElement('button');
-          btn.textContent = 'Descargar';
-          (function (f) {
-            btn.addEventListener('click', function () {
-              chrome.runtime.sendMessage({ type: 'DOWNLOAD_FILE', url: f.url, filename: f.filename });
-            });
-          })(file);
-          row.append(label, btn);
-          box.appendChild(row);
-        });
-      } catch (e) {
-        box.innerHTML = '<p class="small">⚠️ ' + e.message + '</p>';
-      }
+  function renderVideos(data) {
+    const { videos, title } = data;
+    const mp4 = videos.filter(v => v.type === 'mp4' || (!v.type && !v.url?.includes('.m3u8')));
+    const adaptive = videos.filter(v => v.type === 'hls' || v.type === 'dash');
+    const all = [...mp4, ...adaptive];
+
+    body.innerHTML = `
+      ${title ? `<div class="video-title" title="${esc(title)}">🎬 ${esc(title)}</div>` : ''}
+      <div class="section-title">Videos detectados (${all.length})</div>
+      <div class="video-list" id="video-list"></div>
+      <div class="actions">
+        <button class="btn-action" id="btn-reload">🔄 Reescanear</button>
+        <button class="btn-action danger" id="btn-clear">🗑 Limpiar</button>
+      </div>
+    `;
+
+    const list = document.getElementById('video-list');
+    all.forEach((v, i) => {
+      const q = v.type === 'hls' ? 'HLS' : v.type === 'dash' ? 'DASH' : (v.height ? v.height + 'p' : (v.quality || '?'));
+      const isAdaptive = v.type === 'hls' || v.type === 'dash';
+      const meta = v.width && v.height ? `${v.width}×${v.height}` : (isAdaptive ? 'Streaming' : '');
+      const item = document.createElement('div');
+      item.className = 'video-item';
+      item.innerHTML = `
+        <div class="video-info">
+          <span class="quality-badge ${v.type === 'hls' ? 'hls' : v.type === 'dash' ? 'dash' : ''}">${esc(q)}</span>
+          ${meta ? `<span class="video-meta">${esc(meta)}</span>` : ''}
+        </div>
+        <div style="display:flex;gap:4px;align-items:center">
+          <button class="btn-download copy" data-idx="${i}" title="Copiar URL">📋</button>
+          ${!isAdaptive
+            ? `<a class="btn-download" href="${v.url}" download target="_blank" title="Descargar">⬇ Descargar</a>`
+            : `<a class="btn-download" href="${v.url}" target="_blank" title="Abrir stream">▶ Abrir</a>`
+          }
+        </div>
+      `;
+      list.appendChild(item);
     });
-    return el;
+
+    list.querySelectorAll('.copy').forEach(btn => {
+      btn.addEventListener('click', () => {
+        navigator.clipboard.writeText(all[+btn.dataset.idx].url)
+          .then(() => showToast('✅ URL copiada'))
+          .catch(() => showToast('❌ Error al copiar', '#e74c3c'));
+      });
+    });
+
+    document.getElementById('btn-reload')?.addEventListener('click', triggerRescan);
+    document.getElementById('btn-clear')?.addEventListener('click', clearVideos);
   }
 
-  async function injectAndScan(tabId) {
-    await chrome.scripting.executeScript({ target: { tabId: tabId, allFrames: true }, files: ['js/content.js'] });
-    await new Promise(function (r) { setTimeout(r, 350); });
-    return chrome.tabs.sendMessage(tabId, { type: 'SCAN_PAGE' });
+  async function getActiveTab() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tab;
   }
 
-  async function load() {
-    var statusEl = $('#status');
-    statusEl.textContent = 'Leyendo…';
-    $('#addDomainBtn').style.display = 'none';
+  async function triggerRescan() {
+    const tab = await getActiveTab();
+    if (!tab) return renderEmpty('No hay pestaña activa.');
 
-    var tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    var tab = tabs[0];
-    if (!tab || !tab.id) { statusEl.textContent = 'Sin pestaña activa'; return; }
+    body.innerHTML = '<div class="state-loading"><div class="spinner"></div><span>Rescaneando...</span></div>';
 
-    currentTabUrl = tab.url || '';
+    await chrome.runtime.sendMessage({ action: 'CLEAR_VIDEOS', tabId: tab.id }).catch(() => {});
 
-    if (/^(chrome|edge|about|chrome-extension):/.test(currentTabUrl)) {
-      $('#currentDomain').textContent = '-';
-      statusEl.textContent = '⛔ URL no compatible';
-      $('#list').innerHTML = '<div class="item"><p>Navega a una página web normal y vuelve a abrir la extensión.</p></div>';
-      return;
-    }
-
-    var hostname = '';
-    try { hostname = new URL(currentTabUrl).hostname; } catch (e) {}
-    $('#currentDomain').textContent = hostname;
-
-    var res;
     try {
-      res = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_PAGE' });
-    } catch (e1) {
-      try { res = await injectAndScan(tab.id); }
-      catch (e2) {
-        statusEl.textContent = 'Error';
-        $('#list').innerHTML = '<div class="item"><p>⚠️ Recarga la página (F5) y vuelve a abrir la extensión.</p></div>';
-        return;
-      }
-    }
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        files: ['js/inject.js']
+      });
+    } catch (e) {}
 
-    if (!res.allowed) {
-      statusEl.textContent = '⛔ No autorizado';
-      var btn = $('#addDomainBtn');
-      btn.textContent = '➕ Autorizar ' + normalizeDomain(hostname);
-      btn.style.display = 'block';
-      btn.onclick = async function () {
-        await chrome.runtime.sendMessage({ type: 'ADD_DOMAIN', domain: hostname });
-        btn.style.display = 'none';
-        load();
-      };
-    } else {
-      statusEl.textContent = '✅ Autorizado';
-    }
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        func: () => { window.__vimeoRescan?.(); }
+      });
+    } catch (e) {}
 
-    $('#count').textContent = String(res.items.length);
-    var list = $('#list');
-    list.innerHTML = '';
-    if (!res.items.length) {
-      list.innerHTML = '<div class="item"><p>No se detectaron iframes de Vimeo en esta página.</p></div>';
-      return;
-    }
-    res.items.forEach(function (item) { list.appendChild(renderItem(item, res.allowed)); });
+    await new Promise(r => setTimeout(r, 2000));
+    await loadVideos(false);
   }
 
-  document.getElementById('refreshBtn').addEventListener('click', load);
-  load();
+  async function clearVideos() {
+    const tab = await getActiveTab();
+    if (!tab) return;
+    await chrome.runtime.sendMessage({ action: 'CLEAR_VIDEOS', tabId: tab.id }).catch(() => {});
+    renderEmpty('Lista limpiada.');
+  }
+
+  async function loadVideos(autoRescan = true) {
+    const tab = await getActiveTab();
+    if (!tab) return renderEmpty('No hay pestaña activa.');
+
+    try {
+      const data = await chrome.runtime.sendMessage({ action: 'GET_VIDEOS', tabId: tab.id });
+      if (data?.videos?.length > 0) {
+        renderVideos(data);
+      } else if (autoRescan) {
+        await triggerRescan();
+      } else {
+        renderEmpty();
+      }
+    } catch (e) {
+      renderEmpty('Error al comunicar con la extensión.');
+    }
+  }
+
+  loadVideos();
+
 })();
